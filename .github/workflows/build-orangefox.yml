@@ -48,7 +48,7 @@ jobs:
           set -e
           sudo apt-get update
           sudo apt-get install -y \
-            bc bison build-essential ccache curl flex \
+            bc bison build-essential curl flex \
             g++-multilib gcc-multilib git git-lfs gnupg gperf \
             imagemagick lib32ncurses-dev lib32readline-dev \
             lib32z1-dev libelf-dev liblz4-tool libncurses-dev \
@@ -95,7 +95,6 @@ jobs:
           check_branch() {
             local url="$1"
             local branch="$2"
-
             echo "Checking $url [$branch]"
             git ls-remote --exit-code --heads \
               "$url" "refs/heads/$branch" >/dev/null
@@ -115,7 +114,6 @@ jobs:
         run: |
           set -e
           cd "$GITHUB_WORKSPACE/android"
-
           git clone --depth=1 -b "$DEVICE_BRANCH" \
             "$DEVICE_REPO" "$DEVICE_PATH"
 
@@ -124,7 +122,6 @@ jobs:
         run: |
           set -e
           cd "$GITHUB_WORKSPACE/android"
-
           git clone --depth=1 -b "$COMMON_BRANCH" \
             "$COMMON_REPO" "$COMMON_PATH"
 
@@ -158,21 +155,18 @@ jobs:
           git clone --depth=1 -b "$VENDOR_BRANCH" \
             "$VENDOR_COMMON_REPO" vendor/xiaomi/sm8450-common
 
-      - name: Validate device tree and build system
+      - name: Validate device tree and recovery source
         shell: bash
         run: |
           set -eo pipefail
           cd "$GITHUB_WORKSPACE/android"
 
           required_files=(
-            "build/envsetup.sh"
-            "build/make/core/envsetup.mk"
-            "build/soong/soong_ui.bash"
-            "device/xiaomi/cupid/BoardConfig.mk"
-            "device/xiaomi/cupid/device.mk"
-            "device/xiaomi/cupid/AndroidProducts.mk"
-            "device/xiaomi/cupid/lineage.dependencies"
-            "device/xiaomi/sm8450-common/BoardConfigCommon.mk"
+            "$DEVICE_PATH/BoardConfig.mk"
+            "$DEVICE_PATH/device.mk"
+            "$DEVICE_PATH/AndroidProducts.mk"
+            "$DEVICE_PATH/lineage.dependencies"
+            "$COMMON_PATH/BoardConfigCommon.mk"
           )
 
           for file in "${required_files[@]}"; do
@@ -182,19 +176,21 @@ jobs:
             fi
           done
 
-          if [[ ! -d vendor/recovery || ! -d bootable/recovery ]]; then
-            echo "::error::OrangeFox recovery source is incomplete"
+          test -d vendor/recovery || {
+            echo "::error::OrangeFox vendor/recovery source is missing"
             exit 1
-          fi
+          }
 
-          if [[ ! -f vendor/twrp/config/common.mk ]]; then
+          test -d bootable/recovery || {
+            echo "::error::bootable/recovery source is missing"
+            exit 1
+          }
+
+          test -f vendor/twrp/config/common.mk || {
             echo "::error::vendor/twrp/config/common.mk is missing"
             find vendor -maxdepth 5 -type f -name common.mk -print || true
             exit 1
-          fi
-
-          echo "Build root: $PWD"
-          echo "Build system files validated."
+          }
 
       - name: Configure OrangeFox product
         shell: bash
@@ -202,8 +198,8 @@ jobs:
           set -e
           cd "$GITHUB_WORKSPACE/android"
 
-          PRODUCT_MK="device/xiaomi/cupid/twrp_cupid.mk"
-          PRODUCTS_FILE="device/xiaomi/cupid/AndroidProducts.mk"
+          PRODUCT_MK="$DEVICE_PATH/twrp_cupid.mk"
+          PRODUCTS_FILE="$DEVICE_PATH/AndroidProducts.mk"
 
           cat > "$PRODUCT_MK" <<'EOF'
           #
@@ -224,13 +220,12 @@ jobs:
           EOF
 
           touch "$PRODUCTS_FILE"
-
           if ! grep -q 'twrp_cupid.mk' "$PRODUCTS_FILE"; then
             printf '\nPRODUCT_MAKEFILES += \\\n    $(LOCAL_DIR)/twrp_cupid.mk\n' \
               >> "$PRODUCTS_FILE"
           fi
 
-      - name: Load environment and build recovery
+      - name: Build recovery image
         shell: bash
         run: |
           set -eo pipefail
@@ -241,60 +236,37 @@ jobs:
           export LC_ALL=C
           export USE_CCACHE=0
 
-          echo "===== JAVA VERSION ====="
-          java -version
+          echo "===== CHECK SOURCE TREE ====="
+          test -f build/envsetup.sh || {
+            echo "::error::build/envsetup.sh not found"
+            exit 1
+          }
 
-          echo "===== CHECK BUILD ROOT ====="
-          pwd
-          ls -l build/envsetup.sh
-          ls -l build/make/core/envsetup.mk
-          ls -l build/soong/soong_ui.bash
-
-          echo "===== TRACE envsetup.sh ====="
-          set +e
+          echo "===== LOAD BUILD ENVIRONMENT ====="
+          # '|| true' mencegah pemeriksaan opsional di skrip yang di-source
+          # menghentikan shell sebelum fungsi build selesai dimuat.
           set +u
-          set -x
-          source build/envsetup.sh \
-            > >(tee "$RUNNER_TEMP/envsetup-output.log") \
-            2> >(tee "$RUNNER_TEMP/envsetup-trace.log" >&2)
-          ENVSETUP_STATUS=$?
-          set +x
+          source build/envsetup.sh || true
           set -e
 
-          echo "envsetup.sh exit status: $ENVSETUP_STATUS"
-
-          if [[ "$ENVSETUP_STATUS" -ne 0 ]]; then
-            echo "::error::envsetup.sh failed; printing diagnostic logs"
-            echo "===== ENVSETUP OUTPUT ====="
-            cat "$RUNNER_TEMP/envsetup-output.log" || true
-            echo "===== ENVSETUP TRACE ====="
-            tail -n 200 "$RUNNER_TEMP/envsetup-trace.log" || true
-            exit "$ENVSETUP_STATUS"
+          if ! declare -F lunch >/dev/null 2>&1; then
+            echo "::error::Function lunch was not loaded by envsetup.sh"
+            echo "===== ENVSETUP DIAGNOSTICS ====="
+            grep -n -C 4 \
+              'orangefox_envsetup\|services/core/xsd/vts/Android.mk' \
+              build/make/envsetup.sh vendor/twrp/build/envsetup.sh \
+              2>/dev/null || true
+            exit 1
           fi
 
           echo "===== SELECT PRODUCT ====="
-          set +e
-          lunch twrp_cupid-eng
-          LUNCH_STATUS=$?
-          set -e
-
-          echo "lunch exit status: $LUNCH_STATUS"
-          if [[ "$LUNCH_STATUS" -ne 0 ]]; then
+          if ! lunch twrp_cupid-eng; then
             echo "::error::lunch twrp_cupid-eng failed"
-            exit "$LUNCH_STATUS"
+            exit 1
           fi
 
           echo "===== BUILD RECOVERY IMAGE ====="
-          set +e
           mka adbd recoveryimage -j"$ANDROID_JOBS"
-          BUILD_STATUS=$?
-          set -e
-
-          echo "Build exit status: $BUILD_STATUS"
-          if [[ "$BUILD_STATUS" -ne 0 ]]; then
-            echo "::error::Recovery compilation failed"
-            exit "$BUILD_STATUS"
-          fi
 
       - name: Verify recovery.img
         shell: bash
@@ -323,14 +295,3 @@ jobs:
             android/recovery.img.sha256
           if-no-files-found: error
           retention-days: 14
-
-      - name: Upload envsetup diagnostics on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: envsetup-diagnostics
-          path: |
-            ${{ runner.temp }}/envsetup-output.log
-            ${{ runner.temp }}/envsetup-trace.log
-          if-no-files-found: ignore
-          retention-days: 7
