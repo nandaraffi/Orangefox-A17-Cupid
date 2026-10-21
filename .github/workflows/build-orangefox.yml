@@ -122,10 +122,8 @@ jobs:
           git clone --depth=1 -b "$QCOM_COMMON_BRANCH" "$QCOM_COMMON_REPO" hardware/qcom-caf/common
 
           # Direct git clone does not apply LineageOS manifest linkfiles.
-          test -f hardware/qcom-caf/common/common.mk || {
-            echo "::error::Qualcomm common.mk is missing"
-            exit 1
-          }
+          # The Qualcomm common project may not contain common.mk; do not
+          # require it. Recreate the SEPolicy linkfile expected by the tree.
           test -f hardware/qcom-caf/common/os_pickup_sepolicy_vndr.mk || {
             echo "::error::os_pickup_sepolicy_vndr.mk is missing"
             find hardware/qcom-caf/common -maxdepth 2 -type f -print | head -100
@@ -165,7 +163,8 @@ jobs:
             "$DEVICE_PATH/AndroidProducts.mk"
             "$DEVICE_PATH/lineage.dependencies"
             "$COMMON_PATH/BoardConfigCommon.mk"
-            "hardware/qcom-caf/common/common.mk"\n            "hardware/qcom-caf/common/os_pickup_sepolicy_vndr.mk"\n            "device/qcom/sepolicy_vndr/SEPolicy.mk"
+            "hardware/qcom-caf/common/os_pickup_sepolicy_vndr.mk"
+            "device/qcom/sepolicy_vndr/SEPolicy.mk"
           )
           for file in "${required_files[@]}"; do
             if [[ ! -f "$file" ]]; then
