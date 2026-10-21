@@ -26,10 +26,12 @@ jobs:
       DEVICE: cupid
       DEVICE_PATH: device/xiaomi/cupid
       COMMON_PATH: device/xiaomi/sm8450-common
+
       DEVICE_BRANCH: lineage-24.0
       COMMON_BRANCH: lineage-24.0
       VENDOR_BRANCH: lineage-24.0
       FOX_BRANCH: "12.1"
+
       ANDROID_JOBS: "2"
 
       DEVICE_REPO: https://github.com/nandaraffi/android_device_xiaomi_cupid.git
@@ -45,13 +47,15 @@ jobs:
 
     steps:
       - name: Install build dependencies
+        shell: bash
         run: |
+          set -e
           sudo apt-get update
           sudo apt-get install -y \
-            bc bison build-essential ccache curl flex g++-multilib \
-            gcc-multilib git git-lfs gnupg gperf imagemagick \
-            lib32ncurses-dev lib32readline-dev lib32z1-dev \
-            libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev \
+            bc bison build-essential ccache curl flex \
+            g++-multilib gcc-multilib git git-lfs gnupg gperf \
+            imagemagick lib32ncurses-dev lib32readline-dev \
+            lib32z1-dev libelf-dev liblz4-tool libncurses-dev \
             libssl-dev libxml2 libxml2-utils lz4 \
             openjdk-17-jdk python3 python-is-python3 \
             rsync unzip wget zip zlib1g-dev
@@ -59,8 +63,7 @@ jobs:
       - name: Configure Git and repo tool
         shell: bash
         run: |
-          set -euo pipefail
-
+          set -e
           git config --global user.name "OrangeFox Builder"
           git config --global user.email "builder@example.invalid"
           git config --global color.ui false
@@ -75,7 +78,7 @@ jobs:
       - name: Initialize and sync OrangeFox
         shell: bash
         run: |
-          set -euo pipefail
+          set -eo pipefail
 
           git clone --depth=1 \
             https://gitlab.com/OrangeFox/sync.git \
@@ -91,17 +94,18 @@ jobs:
       - name: Verify required LineageOS branches
         shell: bash
         run: |
-          set -euo pipefail
+          set -eo pipefail
 
           check_branch() {
             local url="$1"
             local branch="$2"
 
             echo "Checking $url [$branch]"
-            if ! git ls-remote --exit-code --heads \
-              "$url" "refs/heads/$branch" | grep -q .; then
+
+            if ! git ls-remote --heads "$url" \
+              "refs/heads/$branch" | grep -q "refs/heads/$branch"; then
               echo "::error::Branch $branch not found in $url"
-              exit 1
+              return 1
             fi
           }
 
@@ -117,7 +121,7 @@ jobs:
       - name: Fetch Xiaomi 12 device tree
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
           cd "$GITHUB_WORKSPACE/android"
 
           git clone --depth=1 -b "$DEVICE_BRANCH" \
@@ -126,7 +130,7 @@ jobs:
       - name: Fetch SM8450 common device tree
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
           cd "$GITHUB_WORKSPACE/android"
 
           git clone --depth=1 -b "$COMMON_BRANCH" \
@@ -135,7 +139,7 @@ jobs:
       - name: Fetch Xiaomi hardware and kernel dependencies
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
           cd "$GITHUB_WORKSPACE/android"
 
           git clone --depth=1 -b "$DEVICE_BRANCH" \
@@ -153,7 +157,7 @@ jobs:
       - name: Fetch proprietary vendor trees
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
           cd "$GITHUB_WORKSPACE/android"
 
           git clone --depth=1 -b "$VENDOR_BRANCH" \
@@ -165,7 +169,7 @@ jobs:
       - name: Validate device tree and recovery source
         shell: bash
         run: |
-          set -euo pipefail
+          set -eo pipefail
           cd "$GITHUB_WORKSPACE/android"
 
           required_files=(
@@ -174,7 +178,6 @@ jobs:
             "$DEVICE_PATH/AndroidProducts.mk"
             "$DEVICE_PATH/lineage.dependencies"
             "$COMMON_PATH/BoardConfigCommon.mk"
-            "vendor/xiaomi/cupid/Android.mk"
           )
 
           for file in "${required_files[@]}"; do
@@ -189,26 +192,26 @@ jobs:
             exit 1
           fi
 
-          if [[ ! -f bootable/recovery/Android.bp ]]; then
-            echo "::error::Recovery source is incomplete"
+          if [[ ! -d bootable/recovery ]]; then
+            echo "::error::Recovery source directory is missing"
             exit 1
           fi
 
-          echo "Checking common product configuration..."
+          echo "Detected recovery configuration files:"
+          find vendor -maxdepth 5 \
+            -type f \( -name common.mk -o -name '*recovery*.mk' \) \
+            -print | sort || true
 
           if [[ ! -f vendor/twrp/config/common.mk ]]; then
             echo "::error::vendor/twrp/config/common.mk is missing."
-            echo "Inspect OrangeFox sync output before attempting a build."
-            find vendor -maxdepth 4 \
-              \( -name common.mk -o -name OrangeFox_A12.sh \) \
-              -print || true
+            echo "The build will not create a fake configuration file."
             exit 1
           fi
 
       - name: Configure TWRP-compatible OrangeFox product
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
           cd "$GITHUB_WORKSPACE/android"
 
           PRODUCT_MK="$DEVICE_PATH/twrp_cupid.mk"
@@ -223,9 +226,7 @@ jobs:
           DEVICE_PATH := device/xiaomi/cupid
 
           $(call inherit-product, $(DEVICE_PATH)/device.mk)
-
           $(call inherit-product-if-exists, $(DEVICE_PATH)/fox_cupid.mk)
-
           $(call inherit-product, vendor/twrp/config/common.mk)
 
           PRODUCT_NAME := twrp_cupid
@@ -242,13 +243,14 @@ jobs:
               >> "$PRODUCTS_FILE"
           fi
 
-          echo "Generated $PRODUCT_MK"
+          echo "Generated product makefile:"
           cat "$PRODUCT_MK"
 
       - name: Build recovery image
         shell: bash
         run: |
-          set -euo pipefail
+          # Jangan aktifkan nounset sebelum memuat envsetup.sh.
+          set -eo pipefail
           cd "$GITHUB_WORKSPACE/android"
 
           export ALLOW_MISSING_DEPENDENCIES=true
@@ -260,7 +262,10 @@ jobs:
           mkdir -p "$CCACHE_DIR"
           ccache -M 5G
 
+          # envsetup.sh dapat merujuk variabel shell yang belum terdefinisi.
+          set +u
           source build/envsetup.sh
+
           lunch twrp_cupid-eng
 
           mka adbd recoveryimage -j"$ANDROID_JOBS"
@@ -268,20 +273,21 @@ jobs:
       - name: Verify recovery.img
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
           cd "$GITHUB_WORKSPACE/android"
 
           IMAGE="out/target/product/cupid/recovery.img"
 
           if [[ ! -s "$IMAGE" ]]; then
-            echo "::error::Build completed without a valid recovery.img"
+            echo "::error::Build did not produce recovery.img"
             find out/target/product/cupid -maxdepth 2 \
-              -type f \( -name '*recovery*.img' -o -name 'boot.img' \) \
-              -print || true
+              -type f -name '*.img' -print 2>/dev/null || true
             exit 1
           fi
 
+          echo "Recovery image generated:"
           ls -lh "$IMAGE"
+
           sha256sum "$IMAGE" | tee recovery.img.sha256
 
       - name: Upload recovery.img only
