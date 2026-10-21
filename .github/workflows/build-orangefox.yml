@@ -26,20 +26,16 @@ jobs:
       DEVICE: cupid
       DEVICE_PATH: device/xiaomi/cupid
       COMMON_PATH: device/xiaomi/sm8450-common
-
       DEVICE_BRANCH: lineage-24.0
       COMMON_BRANCH: lineage-24.0
       VENDOR_BRANCH: lineage-24.0
       FOX_BRANCH: "12.1"
-
       ANDROID_JOBS: "2"
 
       DEVICE_REPO: https://github.com/nandaraffi/android_device_xiaomi_cupid.git
       COMMON_REPO: https://github.com/nandaraffi/android_device_xiaomi_sm8450-common.git
-
       VENDOR_DEVICE_REPO: https://github.com/TheMuppets/proprietary_vendor_xiaomi_cupid.git
       VENDOR_COMMON_REPO: https://github.com/TheMuppets/proprietary_vendor_xiaomi_sm8450-common.git
-
       HARDWARE_REPO: https://github.com/LineageOS/android_hardware_xiaomi.git
       KERNEL_REPO: https://github.com/LineageOS/android_kernel_xiaomi_sm8450.git
       DTBO_REPO: https://github.com/LineageOS/android_kernel_xiaomi_sm8450-devicetrees.git
@@ -79,7 +75,6 @@ jobs:
         shell: bash
         run: |
           set -eo pipefail
-
           git clone --depth=1 \
             https://gitlab.com/OrangeFox/sync.git \
             "$RUNNER_TEMP/orangefox-sync"
@@ -101,7 +96,6 @@ jobs:
             local branch="$2"
 
             echo "Checking $url [$branch]"
-
             if ! git ls-remote --heads "$url" \
               "refs/heads/$branch" | grep -q "refs/heads/$branch"; then
               echo "::error::Branch $branch not found in $url"
@@ -123,7 +117,6 @@ jobs:
         run: |
           set -e
           cd "$GITHUB_WORKSPACE/android"
-
           git clone --depth=1 -b "$DEVICE_BRANCH" \
             "$DEVICE_REPO" "$DEVICE_PATH"
 
@@ -132,7 +125,6 @@ jobs:
         run: |
           set -e
           cd "$GITHUB_WORKSPACE/android"
-
           git clone --depth=1 -b "$COMMON_BRANCH" \
             "$COMMON_REPO" "$COMMON_PATH"
 
@@ -197,18 +189,13 @@ jobs:
             exit 1
           fi
 
-          echo "Detected recovery configuration files:"
-          find vendor -maxdepth 5 \
-            -type f \( -name common.mk -o -name '*recovery*.mk' \) \
-            -print | sort || true
-
           if [[ ! -f vendor/twrp/config/common.mk ]]; then
-            echo "::error::vendor/twrp/config/common.mk is missing."
-            echo "The build will not create a fake configuration file."
+            echo "::error::vendor/twrp/config/common.mk is missing"
+            find vendor -maxdepth 5 -type f -name common.mk -print || true
             exit 1
           fi
 
-      - name: Configure TWRP-compatible OrangeFox product
+      - name: Configure OrangeFox product
         shell: bash
         run: |
           set -e
@@ -221,7 +208,6 @@ jobs:
           #
           # OrangeFox Recovery product for Xiaomi 12 (cupid)
           #
-
           PRODUCT_RELEASE_NAME := cupid
           DEVICE_PATH := device/xiaomi/cupid
 
@@ -237,19 +223,15 @@ jobs:
           EOF
 
           touch "$PRODUCTS_FILE"
-
           if ! grep -q 'twrp_cupid.mk' "$PRODUCTS_FILE"; then
             printf '\nPRODUCT_MAKEFILES += \\\n    $(LOCAL_DIR)/twrp_cupid.mk\n' \
               >> "$PRODUCTS_FILE"
           fi
 
-          echo "Generated product makefile:"
-          cat "$PRODUCT_MK"
-
       - name: Build recovery image
         shell: bash
         run: |
-          # Jangan aktifkan nounset sebelum memuat envsetup.sh.
+          # Jangan gunakan nounset saat memuat envsetup.sh.
           set -eo pipefail
           cd "$GITHUB_WORKSPACE/android"
 
@@ -260,9 +242,19 @@ jobs:
           export CCACHE_DIR="$GITHUB_WORKSPACE/.ccache"
 
           mkdir -p "$CCACHE_DIR"
-          ccache -M 5G
 
-          # envsetup.sh dapat merujuk variabel shell yang belum terdefinisi.
+          # Ccache bersifat opsional; kegagalannya tidak boleh menghentikan build.
+          if command -v ccache >/dev/null 2>&1; then
+            ccache -M 5G || {
+              echo "::warning::Could not set ccache size; continuing without this setting."
+            }
+            ccache -s || true
+          else
+            echo "::warning::ccache is unavailable; continuing without it."
+            export USE_CCACHE=0
+          fi
+
+          # Android envsetup dapat memakai variabel shell yang belum terdefinisi.
           set +u
           source build/envsetup.sh
 
@@ -285,9 +277,7 @@ jobs:
             exit 1
           fi
 
-          echo "Recovery image generated:"
           ls -lh "$IMAGE"
-
           sha256sum "$IMAGE" | tee recovery.img.sha256
 
       - name: Upload recovery.img only
