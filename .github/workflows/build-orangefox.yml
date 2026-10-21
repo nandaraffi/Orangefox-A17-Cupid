@@ -120,6 +120,28 @@ jobs:
           cd "$GITHUB_WORKSPACE/android"
           git clone --depth=1 -b "$DEVICE_BRANCH" "$HARDWARE_REPO" hardware/xiaomi
           git clone --depth=1 -b "$QCOM_COMMON_BRANCH" "$QCOM_COMMON_REPO" hardware/qcom-caf/common
+
+          # Direct git clone does not apply LineageOS manifest linkfiles.
+          test -f hardware/qcom-caf/common/common.mk || {
+            echo "::error::Qualcomm common.mk is missing"
+            exit 1
+          }
+          test -f hardware/qcom-caf/common/os_pickup_sepolicy_vndr.mk || {
+            echo "::error::os_pickup_sepolicy_vndr.mk is missing"
+            find hardware/qcom-caf/common -maxdepth 2 -type f -print | head -100
+            exit 1
+          }
+
+          mkdir -p device/qcom/sepolicy_vndr hardware/qcom
+          ln -sfn "$GITHUB_WORKSPACE/android/hardware/qcom-caf/common/os_pickup_sepolicy_vndr.mk" device/qcom/sepolicy_vndr/SEPolicy.mk
+          if [[ -f hardware/qcom-caf/common/os_pickup_aosp.mk ]]; then
+            ln -sfn "$GITHUB_WORKSPACE/android/hardware/qcom-caf/common/os_pickup_aosp.mk" hardware/qcom/Android.mk
+          fi
+          if [[ -f hardware/qcom-caf/common/os_pickup_qssi.bp ]]; then
+            mkdir -p hardware/qcom-caf/sm8450
+            ln -sfn "$GITHUB_WORKSPACE/android/hardware/qcom-caf/common/os_pickup_qssi.bp" hardware/qcom-caf/sm8450/Android.bp
+          fi
+
           git clone --depth=1 -b "$DEVICE_BRANCH" "$KERNEL_REPO" kernel/xiaomi/sm8450
           git clone --depth=1 -b "$DEVICE_BRANCH" "$DTBO_REPO" kernel/xiaomi/sm8450-devicetrees
           git clone --depth=1 -b "$DEVICE_BRANCH" "$MODULES_REPO" kernel/xiaomi/sm8450-modules
@@ -143,7 +165,7 @@ jobs:
             "$DEVICE_PATH/AndroidProducts.mk"
             "$DEVICE_PATH/lineage.dependencies"
             "$COMMON_PATH/BoardConfigCommon.mk"
-            "hardware/qcom-caf/common/common.mk"
+            "hardware/qcom-caf/common/common.mk"\n            "hardware/qcom-caf/common/os_pickup_sepolicy_vndr.mk"\n            "device/qcom/sepolicy_vndr/SEPolicy.mk"
           )
           for file in "${required_files[@]}"; do
             if [[ ! -f "$file" ]]; then
