@@ -1,0 +1,226 @@
+
+name: "Build OrangeFox - Xiaomi 12 (cupid)"
+
+"on":
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: orangefox-cupid-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build recovery.img
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+
+    env:
+      DEVICE: cupid
+      DEVICE_BRANCH: lineage-24.0
+      COMMON_BRANCH: lineage-24.0
+      FOX_BRANCH: "12.1"
+      DEVICE_REPO: https://github.com/nandaraffi/android_device_xiaomi_cupid.git
+      COMMON_REPO: https://github.com/nandaraffi/android_device_xiaomi_sm8450-common.git
+      VENDOR_DEVICE_URL: https://github.com/TheMuppets/proprietary_vendor_xiaomi_cupid.git
+      VENDOR_DEVICE_BRANCH: lineage-23.2
+      VENDOR_COMMON_URL: https://github.com/TheMuppets/proprietary_vendor_xiaomi_sm8450-common.git
+      VENDOR_COMMON_BRANCH: lineage-23.2
+      ANDROID_JOBS: "2"
+
+    steps:
+      - name: Checkout workflow repository
+        uses: actions/checkout@v4
+
+      - name: Check disk space
+        run: |
+          set -eu
+          df -h
+
+      - name: Install build dependencies
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc bison build-essential ccache curl flex \
+            g++-multilib gcc-multilib git git-lfs gnupg gperf \
+            imagemagick lib32readline-dev lib32z1-dev libelf-dev \
+            liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev \
+            libxml2 libxml2-utils lzop pngcrush rsync schedtool \
+            squashfs-tools xsltproc zip zlib1g-dev python3 \
+            python-is-python3 openjdk-17-jdk
+
+      - name: Install repo tool
+        run: |
+          set -eu
+          mkdir -p "$HOME/bin"
+          curl -fsSL \
+            https://storage.googleapis.com/git-repo-downloads/repo \
+            -o "$HOME/bin/repo"
+          chmod +x "$HOME/bin/repo"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Download OrangeFox sync script
+        run: |
+          set -eu
+          git clone --depth=1 \
+            https://gitlab.com/OrangeFox/sync.git \
+            "$GITHUB_WORKSPACE/orangefox-sync"
+
+          test -f "$GITHUB_WORKSPACE/orangefox-sync/orangefox_sync.sh"
+
+      - name: Initialize and sync OrangeFox
+        run: |
+          set -eu
+          chmod +x \
+            "$GITHUB_WORKSPACE/orangefox-sync/orangefox_sync.sh"
+
+          "$GITHUB_WORKSPACE/orangefox-sync/orangefox_sync.sh" \
+            --branch "$FOX_BRANCH" \
+            --path "$GITHUB_WORKSPACE/android"
+
+      - name: Fetch Xiaomi 12 device tree
+        run: |
+          set -eu
+          cd "$GITHUB_WORKSPACE/android"
+          mkdir -p device/xiaomi
+
+          git clone --depth=1 \
+            --branch "$DEVICE_BRANCH" \
+            "$DEVICE_REPO" \
+            device/xiaomi/cupid
+
+      - name: Fetch SM8450 common device tree
+        run: |
+          set -eu
+          cd "$GITHUB_WORKSPACE/android"
+
+          git clone --depth=1 \
+            --branch "$COMMON_BRANCH" \
+            "$COMMON_REPO" \
+            device/xiaomi/sm8450-common
+
+      - name: Fetch vendor trees
+        run: |
+          set -eu
+          cd "$GITHUB_WORKSPACE/android"
+          mkdir -p vendor/xiaomi
+
+          git clone --depth=1 \
+            --branch "$VENDOR_DEVICE_BRANCH" \
+            "$VENDOR_DEVICE_URL" \
+            vendor/xiaomi/cupid
+
+          git clone --depth=1 \
+            --branch "$VENDOR_COMMON_BRANCH" \
+            "$VENDOR_COMMON_URL" \
+            vendor/xiaomi/sm8450-common
+
+      - name: Validate required files
+        run: |
+          set -eu
+          cd "$GITHUB_WORKSPACE/android"
+
+          for path in \
+            device/xiaomi/cupid/BoardConfig.mk \
+            device/xiaomi/cupid/device.mk \
+            device/xiaomi/cupid/AndroidProducts.mk \
+            device/xiaomi/sm8450-common/BoardConfig.mk \
+            vendor/xiaomi/cupid/BoardConfigVendor.mk \
+            vendor/xiaomi/cupid/cupid-vendor.mk
+          do
+            if [ ! -e "$path" ]; then
+              echo "::error::Required file or directory missing: $path"
+              exit 1
+            fi
+          done
+
+          echo "Required device and vendor files were found."
+
+      - name: Check recovery product
+        run: |
+          set -eu
+          cd "$GITHUB_WORKSPACE/android"
+
+          PRODUCT=""
+
+          for path in \
+            device/xiaomi/cupid/twrp_cupid.mk \
+            device/xiaomi/cupid/fox_cupid.mk
+          do
+            if [ -f "$path" ]; then
+              PRODUCT="$path"
+              break
+            fi
+          done
+
+          if [ -z "$PRODUCT" ]; then
+            echo "::error::No recovery product makefile found."
+            echo "Expected twrp_cupid.mk or fox_cupid.mk."
+            exit 1
+          fi
+
+          if ! grep -qE 'twrp_cupid|fox_cupid' \
+            device/xiaomi/cupid/AndroidProducts.mk; then
+            echo "::error::Recovery product is not registered in AndroidProducts.mk."
+            exit 1
+          fi
+
+          echo "Recovery product found: $PRODUCT"
+
+      - name: Configure ccache
+        run: |
+          set -eu
+          mkdir -p "$GITHUB_WORKSPACE/.ccache"
+          echo "USE_CCACHE=1" >> "$GITHUB_ENV"
+          echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache" >> "$GITHUB_ENV"
+
+      - name: Build recovery
+        run: |
+          set -eu
+          cd "$GITHUB_WORKSPACE/android"
+
+          export USE_CCACHE=1
+          export CCACHE_DIR="$GITHUB_WORKSPACE/.ccache"
+          export ALLOW_MISSING_DEPENDENCIES=true
+          export LC_ALL=C
+
+          ccache -M 5G
+          source build/envsetup.sh
+
+          lunch twrp_cupid-eng
+          mka adbd recoveryimage -j"$ANDROID_JOBS"
+
+      - name: Verify recovery image
+        run: |
+          set -eu
+          cd "$GITHUB_WORKSPACE/android"
+
+          IMAGE="out/target/product/cupid/recovery.img"
+
+          if [ ! -s "$IMAGE" ]; then
+            echo "::error::recovery.img was not produced."
+            find out/target/product/cupid -maxdepth 2 \
+              -type f -name '*.img' -print || true
+            exit 1
+          fi
+
+          mkdir -p "$GITHUB_WORKSPACE/output"
+          cp "$IMAGE" "$GITHUB_WORKSPACE/output/recovery.img"
+
+          cd "$GITHUB_WORKSPACE/output"
+          sha256sum recovery.img > SHA256SUMS.txt
+          ls -lh recovery.img SHA256SUMS.txt
+
+      - name: Upload recovery image
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: OrangeFox-cupid-recovery
+          path: |
+            output/recovery.img
+            output/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
