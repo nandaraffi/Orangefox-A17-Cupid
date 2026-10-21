@@ -48,7 +48,7 @@ jobs:
           set -e
           sudo apt-get update
           sudo apt-get install -y \
-            bc bison build-essential ccache curl flex \
+            bc bison build-essential curl flex \
             g++-multilib gcc-multilib git git-lfs gnupg gperf \
             imagemagick lib32ncurses-dev lib32readline-dev \
             lib32z1-dev libelf-dev liblz4-tool libncurses-dev \
@@ -96,11 +96,8 @@ jobs:
             local branch="$2"
 
             echo "Checking $url [$branch]"
-            if ! git ls-remote --heads "$url" \
-              "refs/heads/$branch" | grep -q "refs/heads/$branch"; then
-              echo "::error::Branch $branch not found in $url"
-              return 1
-            fi
+            git ls-remote --exit-code --heads \
+              "$url" "refs/heads/$branch" >/dev/null
           }
 
           check_branch "$DEVICE_REPO" "$DEVICE_BRANCH"
@@ -179,21 +176,21 @@ jobs:
             fi
           done
 
-          if [[ ! -d vendor/recovery ]]; then
+          test -d vendor/recovery || {
             echo "::error::OrangeFox vendor/recovery source is missing"
             exit 1
-          fi
+          }
 
-          if [[ ! -d bootable/recovery ]]; then
-            echo "::error::Recovery source directory is missing"
+          test -d bootable/recovery || {
+            echo "::error::bootable/recovery source is missing"
             exit 1
-          fi
+          }
 
-          if [[ ! -f vendor/twrp/config/common.mk ]]; then
+          test -f vendor/twrp/config/common.mk || {
             echo "::error::vendor/twrp/config/common.mk is missing"
             find vendor -maxdepth 5 -type f -name common.mk -print || true
             exit 1
-          fi
+          }
 
       - name: Configure OrangeFox product
         shell: bash
@@ -231,36 +228,56 @@ jobs:
       - name: Build recovery image
         shell: bash
         run: |
-          # Jangan gunakan nounset saat memuat envsetup.sh.
           set -eo pipefail
           cd "$GITHUB_WORKSPACE/android"
 
           export ALLOW_MISSING_DEPENDENCIES=true
           export FOX_BUILD_DEVICE=cupid
           export LC_ALL=C
-          export USE_CCACHE=1
-          export CCACHE_DIR="$GITHUB_WORKSPACE/.ccache"
+          export USE_CCACHE=0
 
-          mkdir -p "$CCACHE_DIR"
+          echo "===== CHECK SOURCE TREE ====="
+          test -f build/envsetup.sh || {
+            echo "::error::build/envsetup.sh not found"
+            exit 1
+          }
 
-          # Ccache bersifat opsional; kegagalannya tidak boleh menghentikan build.
-          if command -v ccache >/dev/null 2>&1; then
-            ccache -M 5G || {
-              echo "::warning::Could not set ccache size; continuing without this setting."
-            }
-            ccache -s || true
-          else
-            echo "::warning::ccache is unavailable; continuing without it."
-            export USE_CCACHE=0
-          fi
-
-          # Android envsetup dapat memakai variabel shell yang belum terdefinisi.
+          echo "===== LOAD BUILD ENVIRONMENT ====="
+          set +e
           set +u
           source build/envsetup.sh
+          ENVSETUP_STATUS=$?
+          set -e
 
+          echo "envsetup.sh exit status: $ENVSETUP_STATUS"
+          if [[ "$ENVSETUP_STATUS" -ne 0 ]]; then
+            echo "::error::Failed to load build/envsetup.sh"
+            exit "$ENVSETUP_STATUS"
+          fi
+
+          echo "===== SELECT PRODUCT ====="
+          set +e
           lunch twrp_cupid-eng
+          LUNCH_STATUS=$?
+          set -e
 
+          echo "lunch exit status: $LUNCH_STATUS"
+          if [[ "$LUNCH_STATUS" -ne 0 ]]; then
+            echo "::error::lunch twrp_cupid-eng failed"
+            exit "$LUNCH_STATUS"
+          fi
+
+          echo "===== BUILD RECOVERY IMAGE ====="
+          set +e
           mka adbd recoveryimage -j"$ANDROID_JOBS"
+          BUILD_STATUS=$?
+          set -e
+
+          echo "Build exit status: $BUILD_STATUS"
+          if [[ "$BUILD_STATUS" -ne 0 ]]; then
+            echo "::error::Recovery compilation failed"
+            exit "$BUILD_STATUS"
+          fi
 
       - name: Verify recovery.img
         shell: bash
@@ -269,7 +286,6 @@ jobs:
           cd "$GITHUB_WORKSPACE/android"
 
           IMAGE="out/target/product/cupid/recovery.img"
-
           if [[ ! -s "$IMAGE" ]]; then
             echo "::error::Build did not produce recovery.img"
             find out/target/product/cupid -maxdepth 2 \
