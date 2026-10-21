@@ -1,7 +1,13 @@
-name: "Build OrangeFox - Xiaomi 12 (cupid)"
+
+name: OrangeFox Recovery - Xiaomi 12 (cupid)
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/**"
 
 permissions:
   contents: read
@@ -18,49 +24,47 @@ jobs:
 
     env:
       DEVICE: cupid
+      DEVICE_PATH: device/xiaomi/cupid
+      COMMON_PATH: device/xiaomi/sm8450-common
       DEVICE_BRANCH: lineage-24.0
       COMMON_BRANCH: lineage-24.0
       VENDOR_BRANCH: lineage-24.0
       FOX_BRANCH: "12.1"
+      ANDROID_JOBS: "2"
 
       DEVICE_REPO: https://github.com/nandaraffi/android_device_xiaomi_cupid.git
       COMMON_REPO: https://github.com/nandaraffi/android_device_xiaomi_sm8450-common.git
 
-      VENDOR_DEVICE_URL: https://github.com/TheMuppets/proprietary_vendor_xiaomi_cupid.git
-      VENDOR_COMMON_URL: https://github.com/TheMuppets/proprietary_vendor_xiaomi_sm8450-common.git
+      VENDOR_DEVICE_REPO: https://github.com/TheMuppets/proprietary_vendor_xiaomi_cupid.git
+      VENDOR_COMMON_REPO: https://github.com/TheMuppets/proprietary_vendor_xiaomi_sm8450-common.git
 
-      HARDWARE_URL: https://github.com/LineageOS/android_hardware_xiaomi.git
-      KERNEL_URL: https://github.com/LineageOS/android_kernel_xiaomi_sm8450.git
-      DTBO_URL: https://github.com/LineageOS/android_kernel_xiaomi_sm8450-devicetrees.git
-      MODULES_URL: https://github.com/LineageOS/android_kernel_xiaomi_sm8450-modules.git
-
-      ANDROID_JOBS: "2"
+      HARDWARE_REPO: https://github.com/LineageOS/android_hardware_xiaomi.git
+      KERNEL_REPO: https://github.com/LineageOS/android_kernel_xiaomi_sm8450.git
+      DTBO_REPO: https://github.com/LineageOS/android_kernel_xiaomi_sm8450-devicetrees.git
+      MODULES_REPO: https://github.com/LineageOS/android_kernel_xiaomi_sm8450-modules.git
 
     steps:
-      - name: Checkout workflow repository
-        uses: actions/checkout@v4
-
-      - name: Check disk space
-        run: |
-          set -eu
-          df -h
-
       - name: Install build dependencies
         run: |
-          set -eu
           sudo apt-get update
           sudo apt-get install -y \
-            bc bison build-essential ccache curl flex \
-            g++-multilib gcc-multilib git git-lfs gnupg gperf \
-            imagemagick lib32readline-dev lib32z1-dev libelf-dev \
-            liblz4-tool libncurses-dev libssl-dev libxml2 \
-            libxml2-utils lzop pngcrush rsync schedtool \
-            squashfs-tools xsltproc zip zlib1g-dev \
-            python3 python-is-python3 openjdk-17-jdk
+            bc bison build-essential ccache curl flex g++-multilib \
+            gcc-multilib git git-lfs gnupg gperf imagemagick \
+            lib32ncurses-dev lib32readline-dev lib32z1-dev \
+            libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev \
+            libssl-dev libxml2 libxml2-utils lz4 \
+            openjdk-17-jdk python3 python-is-python3 \
+            rsync unzip wget zip zlib1g-dev
 
-      - name: Install repo tool
+      - name: Configure Git and repo tool
+        shell: bash
         run: |
-          set -eu
+          set -euo pipefail
+
+          git config --global user.name "OrangeFox Builder"
+          git config --global user.email "builder@example.invalid"
+          git config --global color.ui false
+
           mkdir -p "$HOME/bin"
           curl -fsSL \
             https://storage.googleapis.com/git-repo-downloads/repo \
@@ -68,200 +72,192 @@ jobs:
           chmod +x "$HOME/bin/repo"
           echo "$HOME/bin" >> "$GITHUB_PATH"
 
-      - name: Download OrangeFox sync tools
+      - name: Initialize and sync OrangeFox
+        shell: bash
         run: |
-          set -eu
+          set -euo pipefail
+
           git clone --depth=1 \
             https://gitlab.com/OrangeFox/sync.git \
-            "$GITHUB_WORKSPACE/orangefox-sync"
+            "$RUNNER_TEMP/orangefox-sync"
 
-          test -f \
-            "$GITHUB_WORKSPACE/orangefox-sync/orangefox_sync.sh"
-
-          test -f \
-            "$GITHUB_WORKSPACE/orangefox-sync/patches/patch-manifest-fox_12.1.diff"
-
-      - name: Initialize and sync OrangeFox
-        working-directory: ${{ github.workspace }}/orangefox-sync
-        run: |
-          set -eu
+          cd "$RUNNER_TEMP/orangefox-sync"
           chmod +x orangefox_sync.sh
 
           ./orangefox_sync.sh \
             --branch "$FOX_BRANCH" \
             --path "$GITHUB_WORKSPACE/android"
 
-      - name: Verify required branches
+      - name: Verify required LineageOS branches
+        shell: bash
         run: |
-          set -eu
+          set -euo pipefail
 
           check_branch() {
-            url="$1"
-            branch="$2"
-            name="$3"
+            local url="$1"
+            local branch="$2"
 
-            echo "Checking $name: $branch"
-
+            echo "Checking $url [$branch]"
             if ! git ls-remote --exit-code --heads \
-              "$url" "refs/heads/$branch" >/dev/null 2>&1; then
-              echo "::error::Branch $branch is unavailable for $name."
-              echo "::error::No older branch fallback will be used."
+              "$url" "refs/heads/$branch" | grep -q .; then
+              echo "::error::Branch $branch not found in $url"
               exit 1
             fi
           }
 
-          check_branch "$DEVICE_REPO" "$DEVICE_BRANCH" "cupid device tree"
-          check_branch "$COMMON_REPO" "$COMMON_BRANCH" "SM8450 common tree"
-          check_branch "$VENDOR_DEVICE_URL" "$VENDOR_BRANCH" "cupid vendor tree"
-          check_branch "$VENDOR_COMMON_URL" "$VENDOR_BRANCH" "SM8450 vendor tree"
-
-          check_branch "$HARDWARE_URL" "$COMMON_BRANCH" "Xiaomi hardware"
-          check_branch "$KERNEL_URL" "$COMMON_BRANCH" "SM8450 kernel"
-          check_branch "$DTBO_URL" "$COMMON_BRANCH" "SM8450 device trees"
-          check_branch "$MODULES_URL" "$COMMON_BRANCH" "SM8450 kernel modules"
+          check_branch "$DEVICE_REPO" "$DEVICE_BRANCH"
+          check_branch "$COMMON_REPO" "$COMMON_BRANCH"
+          check_branch "$VENDOR_DEVICE_REPO" "$VENDOR_BRANCH"
+          check_branch "$VENDOR_COMMON_REPO" "$VENDOR_BRANCH"
+          check_branch "$HARDWARE_REPO" "$DEVICE_BRANCH"
+          check_branch "$KERNEL_REPO" "$DEVICE_BRANCH"
+          check_branch "$DTBO_REPO" "$DEVICE_BRANCH"
+          check_branch "$MODULES_REPO" "$DEVICE_BRANCH"
 
       - name: Fetch Xiaomi 12 device tree
+        shell: bash
         run: |
-          set -eu
+          set -euo pipefail
           cd "$GITHUB_WORKSPACE/android"
-          mkdir -p device/xiaomi
 
-          git clone --depth=1 --branch "$DEVICE_BRANCH" \
-            "$DEVICE_REPO" device/xiaomi/cupid
+          git clone --depth=1 -b "$DEVICE_BRANCH" \
+            "$DEVICE_REPO" "$DEVICE_PATH"
 
       - name: Fetch SM8450 common device tree
+        shell: bash
         run: |
-          set -eu
+          set -euo pipefail
           cd "$GITHUB_WORKSPACE/android"
-          mkdir -p device/xiaomi
 
-          git clone --depth=1 --branch "$COMMON_BRANCH" \
-            "$COMMON_REPO" device/xiaomi/sm8450-common
+          git clone --depth=1 -b "$COMMON_BRANCH" \
+            "$COMMON_REPO" "$COMMON_PATH"
 
       - name: Fetch Xiaomi hardware and kernel dependencies
+        shell: bash
         run: |
-          set -eu
+          set -euo pipefail
           cd "$GITHUB_WORKSPACE/android"
 
-          mkdir -p hardware kernel/xiaomi
+          git clone --depth=1 -b "$DEVICE_BRANCH" \
+            "$HARDWARE_REPO" hardware/xiaomi
 
-          git clone --depth=1 --branch "$COMMON_BRANCH" \
-            "$HARDWARE_URL" hardware/xiaomi
+          git clone --depth=1 -b "$DEVICE_BRANCH" \
+            "$KERNEL_REPO" kernel/xiaomi/sm8450
 
-          git clone --depth=1 --branch "$COMMON_BRANCH" \
-            "$KERNEL_URL" kernel/xiaomi/sm8450
+          git clone --depth=1 -b "$DEVICE_BRANCH" \
+            "$DTBO_REPO" kernel/xiaomi/sm8450-devicetrees
 
-          git clone --depth=1 --branch "$COMMON_BRANCH" \
-            "$DTBO_URL" kernel/xiaomi/sm8450-devicetrees
+          git clone --depth=1 -b "$DEVICE_BRANCH" \
+            "$MODULES_REPO" kernel/xiaomi/sm8450-modules
 
-          git clone --depth=1 --branch "$COMMON_BRANCH" \
-            "$MODULES_URL" kernel/xiaomi/sm8450-modules
-
-      - name: Fetch vendor trees
+      - name: Fetch proprietary vendor trees
+        shell: bash
         run: |
-          set -eu
-          cd "$GITHUB_WORKSPACE/android"
-          mkdir -p vendor/xiaomi
-
-          git clone --depth=1 --branch "$VENDOR_BRANCH" \
-            "$VENDOR_DEVICE_URL" vendor/xiaomi/cupid
-
-          git clone --depth=1 --branch "$VENDOR_BRANCH" \
-            "$VENDOR_COMMON_URL" vendor/xiaomi/sm8450-common
-
-      - name: Validate required files
-        run: |
-          set -eu
+          set -euo pipefail
           cd "$GITHUB_WORKSPACE/android"
 
-          for path in \
-            device/xiaomi/cupid/BoardConfig.mk \
-            device/xiaomi/cupid/device.mk \
-            device/xiaomi/cupid/AndroidProducts.mk \
-            device/xiaomi/cupid/lineage_cupid.mk \
-            device/xiaomi/cupid/lineage.dependencies \
-            device/xiaomi/sm8450-common/BoardConfigCommon.mk \
-            device/xiaomi/sm8450-common/lineage.dependencies \
-            vendor/xiaomi/cupid/BoardConfigVendor.mk \
-            vendor/xiaomi/cupid/cupid-vendor.mk \
-            vendor/xiaomi/sm8450-common
-          do
-            if [ ! -e "$path" ]; then
-              echo "::error::Required file or directory missing: $path"
+          git clone --depth=1 -b "$VENDOR_BRANCH" \
+            "$VENDOR_DEVICE_REPO" vendor/xiaomi/cupid
+
+          git clone --depth=1 -b "$VENDOR_BRANCH" \
+            "$VENDOR_COMMON_REPO" vendor/xiaomi/sm8450-common
+
+      - name: Validate device tree and recovery source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/android"
+
+          required_files=(
+            "$DEVICE_PATH/BoardConfig.mk"
+            "$DEVICE_PATH/device.mk"
+            "$DEVICE_PATH/AndroidProducts.mk"
+            "$DEVICE_PATH/lineage.dependencies"
+            "$COMMON_PATH/BoardConfigCommon.mk"
+            "vendor/xiaomi/cupid/Android.mk"
+          )
+
+          for file in "${required_files[@]}"; do
+            if [[ ! -f "$file" ]]; then
+              echo "::error::Required file missing: $file"
               exit 1
             fi
           done
 
-          grep -q 'BoardConfigCommon.mk' \
-            device/xiaomi/cupid/BoardConfig.mk
-
-          grep -q 'vendor/xiaomi/cupid/BoardConfigVendor.mk' \
-            device/xiaomi/cupid/BoardConfig.mk
-
-      - name: Validate recovery build prerequisites
-        run: |
-          set -eu
-          cd "$GITHUB_WORKSPACE/android"
-
-          if [ ! -d vendor/recovery ]; then
-            echo "::error::OrangeFox recovery source was not synced."
+          if [[ ! -d vendor/recovery ]]; then
+            echo "::error::OrangeFox vendor/recovery source is missing"
             exit 1
           fi
 
-          if [ ! -f vendor/recovery/config/common.mk ]; then
-            echo "::error::Recovery common product config is missing."
+          if [[ ! -f bootable/recovery/Android.bp ]]; then
+            echo "::error::Recovery source is incomplete"
             exit 1
           fi
 
-          echo "Device and recovery prerequisites found."
+          echo "Checking common product configuration..."
 
-      - name: Create local recovery product
+          if [[ ! -f vendor/twrp/config/common.mk ]]; then
+            echo "::error::vendor/twrp/config/common.mk is missing."
+            echo "Inspect OrangeFox sync output before attempting a build."
+            find vendor -maxdepth 4 \
+              \( -name common.mk -o -name OrangeFox_A12.sh \) \
+              -print || true
+            exit 1
+          fi
+
+      - name: Configure TWRP-compatible OrangeFox product
+        shell: bash
         run: |
-          set -eu
+          set -euo pipefail
           cd "$GITHUB_WORKSPACE/android"
 
-          cat > device/xiaomi/cupid/twrp_cupid.mk <<'EOF'
-          $(call inherit-product, device/xiaomi/cupid/device.mk)
-          $(call inherit-product, vendor/recovery/config/common.mk)
+          PRODUCT_MK="$DEVICE_PATH/twrp_cupid.mk"
+          PRODUCTS_FILE="$DEVICE_PATH/AndroidProducts.mk"
 
-          PRODUCT_DEVICE := cupid
+          cat > "$PRODUCT_MK" <<'EOF'
+          #
+          # OrangeFox Recovery product for Xiaomi 12 (cupid)
+          #
+
+          PRODUCT_RELEASE_NAME := cupid
+          DEVICE_PATH := device/xiaomi/cupid
+
+          $(call inherit-product, $(DEVICE_PATH)/device.mk)
+
+          $(call inherit-product-if-exists, $(DEVICE_PATH)/fox_cupid.mk)
+
+          $(call inherit-product, vendor/twrp/config/common.mk)
+
           PRODUCT_NAME := twrp_cupid
+          PRODUCT_DEVICE := cupid
           PRODUCT_BRAND := Xiaomi
           PRODUCT_MODEL := Xiaomi 12
           PRODUCT_MANUFACTURER := Xiaomi
-          PRODUCT_RELEASE_NAME := cupid
-
-          PRODUCT_BUILD_PROP_OVERRIDES += \
-              PRODUCT_NAME=cupid \
-              TARGET_DEVICE=cupid
           EOF
 
-          if ! grep -q 'twrp_cupid.mk' \
-            device/xiaomi/cupid/AndroidProducts.mk; then
+          touch "$PRODUCTS_FILE"
+
+          if ! grep -q 'twrp_cupid.mk' "$PRODUCTS_FILE"; then
             printf '\nPRODUCT_MAKEFILES += \\\n    $(LOCAL_DIR)/twrp_cupid.mk\n' \
-              >> device/xiaomi/cupid/AndroidProducts.mk
+              >> "$PRODUCTS_FILE"
           fi
 
-          echo "Local recovery product registered."
-
-      - name: Configure ccache
-        run: |
-          set -eu
-          mkdir -p "$GITHUB_WORKSPACE/.ccache"
-
-          echo "USE_CCACHE=1" >> "$GITHUB_ENV"
-          echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache" >> "$GITHUB_ENV"
+          echo "Generated $PRODUCT_MK"
+          cat "$PRODUCT_MK"
 
       - name: Build recovery image
+        shell: bash
         run: |
-          set -eu
+          set -euo pipefail
           cd "$GITHUB_WORKSPACE/android"
 
+          export ALLOW_MISSING_DEPENDENCIES=true
+          export FOX_BUILD_DEVICE=cupid
+          export LC_ALL=C
           export USE_CCACHE=1
           export CCACHE_DIR="$GITHUB_WORKSPACE/.ccache"
-          export ALLOW_MISSING_DEPENDENCIES=true
-          export LC_ALL=C
 
+          mkdir -p "$CCACHE_DIR"
           ccache -M 5G
 
           source build/envsetup.sh
@@ -269,37 +265,31 @@ jobs:
 
           mka adbd recoveryimage -j"$ANDROID_JOBS"
 
-      - name: Verify recovery image
+      - name: Verify recovery.img
+        shell: bash
         run: |
-          set -eu
+          set -euo pipefail
           cd "$GITHUB_WORKSPACE/android"
 
           IMAGE="out/target/product/cupid/recovery.img"
 
-          if [ ! -s "$IMAGE" ]; then
-            echo "::error::recovery.img was not produced."
-
-            find out/target/product/cupid \
-              -maxdepth 2 -type f -name '*.img' -print || true
-
+          if [[ ! -s "$IMAGE" ]]; then
+            echo "::error::Build completed without a valid recovery.img"
+            find out/target/product/cupid -maxdepth 2 \
+              -type f \( -name '*recovery*.img' -o -name 'boot.img' \) \
+              -print || true
             exit 1
           fi
 
-          mkdir -p "$GITHUB_WORKSPACE/output"
-          cp "$IMAGE" "$GITHUB_WORKSPACE/output/recovery.img"
+          ls -lh "$IMAGE"
+          sha256sum "$IMAGE" | tee recovery.img.sha256
 
-          cd "$GITHUB_WORKSPACE/output"
-          sha256sum recovery.img > SHA256SUMS.txt
-
-          ls -lh recovery.img SHA256SUMS.txt
-
-      - name: Upload recovery image
-        if: success()
+      - name: Upload recovery.img only
         uses: actions/upload-artifact@v4
         with:
           name: OrangeFox-cupid-recovery
           path: |
-            output/recovery.img
-            output/SHA256SUMS.txt
+            android/out/target/product/cupid/recovery.img
+            android/recovery.img.sha256
           if-no-files-found: error
           retention-days: 14
