@@ -1,7 +1,7 @@
 
 name: "Build OrangeFox - Xiaomi 12 (cupid)"
 
-"on":
+on:
   workflow_dispatch:
 
 permissions:
@@ -62,22 +62,26 @@ jobs:
           chmod +x "$HOME/bin/repo"
           echo "$HOME/bin" >> "$GITHUB_PATH"
 
-      - name: Download OrangeFox sync script
+      - name: Download OrangeFox sync tools
         run: |
           set -eu
           git clone --depth=1 \
             https://gitlab.com/OrangeFox/sync.git \
             "$GITHUB_WORKSPACE/orangefox-sync"
 
-          test -f "$GITHUB_WORKSPACE/orangefox-sync/orangefox_sync.sh"
-
-      - name: Initialize and sync OrangeFox
-        run: |
-          set -eu
-          chmod +x \
+          test -f \
             "$GITHUB_WORKSPACE/orangefox-sync/orangefox_sync.sh"
 
-          "$GITHUB_WORKSPACE/orangefox-sync/orangefox_sync.sh" \
+          test -f \
+            "$GITHUB_WORKSPACE/orangefox-sync/patches/patch-manifest-fox_12.1.diff"
+
+      - name: Initialize and sync OrangeFox
+        working-directory: ${{ github.workspace }}/orangefox-sync
+        run: |
+          set -eu
+          chmod +x orangefox_sync.sh
+
+          ./orangefox_sync.sh \
             --branch "$FOX_BRANCH" \
             --path "$GITHUB_WORKSPACE/android"
 
@@ -132,14 +136,12 @@ jobs:
             vendor/xiaomi/cupid/cupid-vendor.mk
           do
             if [ ! -e "$path" ]; then
-              echo "::error::Required file or directory missing: $path"
+              echo "::error::Required file missing: $path"
               exit 1
             fi
           done
 
-          echo "Required device and vendor files were found."
-
-      - name: Check recovery product
+      - name: Check recovery product configuration
         run: |
           set -eu
           cd "$GITHUB_WORKSPACE/android"
@@ -164,7 +166,7 @@ jobs:
 
           if ! grep -qE 'twrp_cupid|fox_cupid' \
             device/xiaomi/cupid/AndroidProducts.mk; then
-            echo "::error::Recovery product is not registered in AndroidProducts.mk."
+            echo "::error::Recovery product is not registered."
             exit 1
           fi
 
@@ -177,7 +179,7 @@ jobs:
           echo "USE_CCACHE=1" >> "$GITHUB_ENV"
           echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache" >> "$GITHUB_ENV"
 
-      - name: Build recovery
+      - name: Build recovery image
         run: |
           set -eu
           cd "$GITHUB_WORKSPACE/android"
@@ -189,7 +191,6 @@ jobs:
 
           ccache -M 5G
           source build/envsetup.sh
-
           lunch twrp_cupid-eng
           mka adbd recoveryimage -j"$ANDROID_JOBS"
 
