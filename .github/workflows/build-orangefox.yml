@@ -37,6 +37,7 @@ jobs:
       DTBO_REPO: https://github.com/LineageOS/android_kernel_xiaomi_sm8450-devicetrees.git
       MODULES_REPO: https://github.com/LineageOS/android_kernel_xiaomi_sm8450-modules.git
       QCOM_COMMON_REPO: https://github.com/LineageOS/android_hardware_qcom-caf_common.git
+      SEPOLICY_REPO: https://github.com/LineageOS/android_device_qcom_sepolicy_vndr.git
 
     steps:
       - name: Install build dependencies
@@ -99,6 +100,18 @@ jobs:
             exit 1
           fi
 
+          # Select an actually published SM8450 vendor sepolicy branch.
+          if git ls-remote --exit-code --heads "$SEPOLICY_REPO" "refs/heads/lineage-24.0-caf-sm8450" >/dev/null 2>&1; then
+            echo "SEPOLICY_BRANCH=lineage-24.0-caf-sm8450" >> "$GITHUB_ENV"
+          elif git ls-remote --exit-code --heads "$SEPOLICY_REPO" "refs/heads/lineage-23.2-caf-sm8450" >/dev/null 2>&1; then
+            echo "SEPOLICY_BRANCH=lineage-23.2-caf-sm8450" >> "$GITHUB_ENV"
+          elif git ls-remote --exit-code --heads "$SEPOLICY_REPO" "refs/heads/lineage-22.2-caf-sm8450" >/dev/null 2>&1; then
+            echo "SEPOLICY_BRANCH=lineage-22.2-caf-sm8450" >> "$GITHUB_ENV"
+          else
+            echo "::error::No compatible SM8450 sepolicy branch found in $SEPOLICY_REPO"
+            exit 1
+          fi
+
       - name: Fetch Xiaomi 12 device tree
         shell: bash
         run: |
@@ -130,7 +143,14 @@ jobs:
             exit 1
           }
 
+          # Fetch the SM8450 project included by the vendor sepolicy makefile.
           mkdir -p device/qcom/sepolicy_vndr hardware/qcom
+          git clone --depth=1 -b "$SEPOLICY_BRANCH" "$SEPOLICY_REPO" device/qcom/sepolicy_vndr/sm8450
+          test -f device/qcom/sepolicy_vndr/sm8450/SEPolicy.mk || {
+            echo "::error::SM8450 SEPolicy.mk is missing from branch $SEPOLICY_BRANCH"
+            find device/qcom/sepolicy_vndr/sm8450 -maxdepth 2 -type f -print | head -100
+            exit 1
+          }
           ln -sfn "$GITHUB_WORKSPACE/android/hardware/qcom-caf/common/os_pickup_sepolicy_vndr.mk" device/qcom/sepolicy_vndr/SEPolicy.mk
           if [[ -f hardware/qcom-caf/common/os_pickup_aosp.mk ]]; then
             ln -sfn "$GITHUB_WORKSPACE/android/hardware/qcom-caf/common/os_pickup_aosp.mk" hardware/qcom/Android.mk
@@ -165,6 +185,7 @@ jobs:
             "$COMMON_PATH/BoardConfigCommon.mk"
             "hardware/qcom-caf/common/os_pickup_sepolicy_vndr.mk"
             "device/qcom/sepolicy_vndr/SEPolicy.mk"
+            "device/qcom/sepolicy_vndr/sm8450/SEPolicy.mk"
           )
           for file in "${required_files[@]}"; do
             if [[ ! -f "$file" ]]; then
@@ -255,8 +276,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: OrangeFox-cupid-recovery
-          path: |
-            android/out/target/product/cupid/recovery.img
-            android/recovery.img.sha256
+          path: android/out/target/product/cupid/recovery.img
           if-no-files-found: error
           retention-days: 14
