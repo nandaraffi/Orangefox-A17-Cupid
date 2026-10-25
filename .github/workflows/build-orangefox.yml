@@ -26,7 +26,7 @@ jobs:
       DEVICE_BRANCH: lineage-24.0
       COMMON_BRANCH: lineage-24.0
       VENDOR_BRANCH: lineage-24.0
-      FOX_BRANCH: "12.1"
+      FOX_BRANCH: "16.0"
       ANDROID_JOBS: "2"
       DEVICE_REPO: https://github.com/nandaraffi/android_device_xiaomi_cupid.git
       COMMON_REPO: https://github.com/nandaraffi/android_device_xiaomi_sm8450-common.git
@@ -195,6 +195,13 @@ jobs:
           done
           test -d vendor/recovery || { echo "::error::OrangeFox vendor/recovery source is missing"; exit 1; }
           test -d bootable/recovery || { echo "::error::bootable/recovery source is missing"; exit 1; }
+          # The LineageOS 24.0 device trees use Soong select(); the old 12.1
+          # manifest lacks this parser support. Fail early if the synced Soong
+          # checkout does not contain select() implementation/docs.
+          if ! grep -RqsE 'select\(' build/soong; then
+            echo "::error::Synced Soong source does not expose select() support; verify the OrangeFox fox_16.0 sync completed correctly."
+            exit 1
+          fi
           test -f vendor/twrp/config/common.mk || {
             echo "::error::vendor/twrp/config/common.mk is missing"
             find vendor -maxdepth 5 -type f -name common.mk -print || true
