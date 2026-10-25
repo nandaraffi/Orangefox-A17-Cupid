@@ -164,13 +164,57 @@ jobs:
           git clone --depth=1 -b "$DEVICE_BRANCH" "$DTBO_REPO" kernel/xiaomi/sm8450-devicetrees
           git clone --depth=1 -b "$DEVICE_BRANCH" "$MODULES_REPO" kernel/xiaomi/sm8450-modules
 
-      - name: Fetch proprietary vendor trees
+      - name: Check runner resources before vendor fetch
         shell: bash
         run: |
-          set -e
+          echo "===== MEMORY ====="
+          free -h || true
+          echo "===== DISK ====="
+          df -h "$GITHUB_WORKSPACE" || true
+          echo "===== CPU ====="
+          nproc || true
+
+      - name: Fetch Xiaomi cupid vendor tree
+        shell: bash
+        timeout-minutes: 25
+        run: |
+          set -euo pipefail
           cd "$GITHUB_WORKSPACE/android"
-          git clone --depth=1 -b "$VENDOR_BRANCH" "$VENDOR_DEVICE_REPO" vendor/xiaomi/cupid
-          git clone --depth=1 -b "$VENDOR_BRANCH" "$VENDOR_COMMON_REPO" vendor/xiaomi/sm8450-common
+          git config --global http.lowSpeedLimit 1000
+          git config --global http.lowSpeedTime 60
+          for attempt in 1 2 3; do
+            echo "Clone vendor/xiaomi/cupid attempt ${attempt}/3"
+            if git clone --depth=1 --single-branch -b "$VENDOR_BRANCH" "$VENDOR_DEVICE_REPO" vendor/xiaomi/cupid; then
+              break
+            fi
+            rm -rf vendor/xiaomi/cupid
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Could not clone Xiaomi cupid vendor tree after 3 attempts"
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Fetch SM8450 common vendor tree
+        shell: bash
+        timeout-minutes: 35
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/android"
+          git config --global http.lowSpeedLimit 1000
+          git config --global http.lowSpeedTime 60
+          for attempt in 1 2 3; do
+            echo "Clone vendor/xiaomi/sm8450-common attempt ${attempt}/3"
+            if git clone --depth=1 --single-branch -b "$VENDOR_BRANCH" "$VENDOR_COMMON_REPO" vendor/xiaomi/sm8450-common; then
+              break
+            fi
+            rm -rf vendor/xiaomi/sm8450-common
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Could not clone SM8450 common vendor tree after 3 attempts"
+              exit 1
+            fi
+            sleep 10
+          done
 
       - name: Validate device tree and recovery source
         shell: bash
