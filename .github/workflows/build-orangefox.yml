@@ -63,6 +63,19 @@ jobs:
           chmod +x "$HOME/bin/repo"
           echo "$HOME/bin" >> "$GITHUB_PATH"
 
+      - name: Free runner disk space
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "===== DISK BEFORE CLEANUP ====="
+          df -h /
+          echo "===== REMOVE UNUSED PREINSTALLED TOOLS ====="
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost /usr/share/swift || true
+          sudo apt-get clean
+          sudo docker system prune -af 2>/dev/null || true
+          echo "===== DISK AFTER CLEANUP ====="
+          df -h /
+
       - name: Initialize and sync OrangeFox
         shell: bash
         run: |
@@ -71,6 +84,18 @@ jobs:
           cd "$RUNNER_TEMP/orangefox-sync"
           chmod +x orangefox_sync.sh
           ./orangefox_sync.sh --branch "$FOX_BRANCH" --path "$GITHUB_WORKSPACE/android"
+
+      - name: Check disk space after OrangeFox sync
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -h /
+          df -h "$GITHUB_WORKSPACE"
+          AVAILABLE_KB="$(df -Pk "$GITHUB_WORKSPACE" | awk 'NR==2 {print $4}')"
+          if [ "$AVAILABLE_KB" -lt 15000000 ]; then
+            echo "::error::Less than 15 GB free after OrangeFox sync; runner disk space is insufficient."
+            exit 1
+          fi
 
       - name: Verify required LineageOS branches
         shell: bash
