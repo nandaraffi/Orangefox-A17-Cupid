@@ -331,7 +331,8 @@ jobs:
             echo "::error::Function lunch was not loaded by envsetup.sh"
             exit 1
           }
-          lunch twrp_cupid-eng
+          # Android 16 lunch uses product-release-variant syntax.
+          lunch twrp_cupid-trunk_staging-eng
           mka adbd recoveryimage -j"$ANDROID_JOBS" 2>&1 | tee "$GITHUB_WORKSPACE/build-recovery.log"
 
       - name: Verify recovery image
