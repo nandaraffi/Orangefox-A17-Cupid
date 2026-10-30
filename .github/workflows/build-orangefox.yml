@@ -70,6 +70,8 @@ jobs:
             libxml2-utils \
             lzop \
             pngcrush \
+            python3 \
+            python-is-python3 \
             rsync \
             schedtool \
             squashfs-tools \
@@ -78,6 +80,25 @@ jobs:
             xz-utils \
             zip \
             zlib1g-dev
+
+      - name: Install Google repo tool
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          sudo curl -fL \
+            https://storage.googleapis.com/git-repo-downloads/repo \
+            -o /usr/local/bin/repo
+
+          sudo chmod 0755 /usr/local/bin/repo
+
+          if ! command -v repo >/dev/null 2>&1; then
+            echo "::error::Google repo tool gagal dipasang."
+            exit 1
+          fi
+
+          echo "===== REPO VERSION ====="
+          repo version
 
       - name: Configure Git
         run: |
@@ -101,7 +122,12 @@ jobs:
           cd "$GITHUB_WORKSPACE/orangefox-sync"
 
           if [[ ! -f orangefox_sync.sh ]]; then
-            echo "::error::orangefox_sync.sh tidak ditemukan di repository sync."
+            echo "::error::orangefox_sync.sh tidak ditemukan."
+            exit 1
+          fi
+
+          if ! command -v repo >/dev/null 2>&1; then
+            echo "::error::Perintah repo belum tersedia."
             exit 1
           fi
 
@@ -110,7 +136,7 @@ jobs:
             --path "$GITHUB_WORKSPACE/fox-source"
 
           if [[ ! -f "$GITHUB_WORKSPACE/fox-source/build/envsetup.sh" ]]; then
-            echo "::error::Source OrangeFox tidak lengkap: build/envsetup.sh tidak ditemukan."
+            echo "::error::Source OrangeFox tidak lengkap."
             exit 1
           fi
 
@@ -123,20 +149,23 @@ jobs:
           mkdir -p device/xiaomi
 
           clone_branch() {
-            local repo="$1"
+            local repo_url="$1"
             local branch="$2"
             local destination="$3"
 
-            echo "Cloning $repo ($branch) -> $destination"
+            echo "Checking $repo_url ($branch)"
 
-            if ! git ls-remote --exit-code --heads "$repo" "$branch" >/dev/null 2>&1; then
-              echo "::error::Branch $branch tidak ditemukan atau repository tidak dapat diakses: $repo"
+            if ! git ls-remote --exit-code --heads \
+              "$repo_url" "$branch" >/dev/null 2>&1; then
+              echo "::error::Branch $branch tidak ditemukan: $repo_url"
               exit 1
             fi
 
             rm -rf "$destination"
+
             git clone --depth=1 --single-branch \
-              --branch "$branch" "$repo" "$destination"
+              --branch "$branch" \
+              "$repo_url" "$destination"
           }
 
           clone_branch \
@@ -150,13 +179,13 @@ jobs:
             "$COMMON_PATH"
 
           for file in \
-            "$DEVICE_PATH/Android.mk" \
+            "$DEVICE_PATH/AndroidProducts.mk" \
             "$DEVICE_PATH/BoardConfig.mk" \
             "$DEVICE_PATH/device.mk" \
             "$COMMON_PATH/BoardConfigCommon.mk"; do
+
             if [[ ! -f "$file" ]]; then
               echo "::error::File penting tidak ditemukan: $file"
-              echo "Periksa struktur kedua device tree sebelum melanjutkan."
               exit 1
             fi
           done
@@ -168,18 +197,21 @@ jobs:
           cd "$GITHUB_WORKSPACE/fox-source"
 
           clone_branch() {
-            local repo="$1"
+            local repo_url="$1"
             local branch="$2"
             local destination="$3"
 
-            if ! git ls-remote --exit-code --heads "$repo" "$branch" >/dev/null 2>&1; then
-              echo "::error::Branch $branch tidak ditemukan atau repository tidak dapat diakses: $repo"
+            if ! git ls-remote --exit-code --heads \
+              "$repo_url" "$branch" >/dev/null 2>&1; then
+              echo "::error::Branch $branch tidak ditemukan: $repo_url"
               exit 1
             fi
 
             rm -rf "$destination"
+
             git clone --depth=1 --single-branch \
-              --branch "$branch" "$repo" "$destination"
+              --branch "$branch" \
+              "$repo_url" "$destination"
           }
 
           clone_branch \
@@ -194,7 +226,7 @@ jobs:
 
           if [[ ! -f vendor/xiaomi/cupid/Android.mk &&
                 ! -f vendor/xiaomi/cupid/Android.bp ]]; then
-            echo "::error::File build vendor Xiaomi cupid tidak ditemukan."
+            echo "::error::Build files vendor Xiaomi cupid tidak ditemukan."
             exit 1
           fi
 
@@ -210,34 +242,22 @@ jobs:
           echo "===== COMMON TREE ====="
           ls -la "$COMMON_PATH"
 
-          echo "===== RECOVERY PARTITION SETTINGS ====="
+          echo "===== RECOVERY SETTINGS ====="
           grep -R -n -E \
             'BOARD_USES_RECOVERY_AS_BOOT|BOARD_RECOVERYIMAGE_PARTITION_SIZE|BOARD_RECOVERYIMAGE_PARTITION_NAME|TARGET_NO_RECOVERY|BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT' \
             "$DEVICE_PATH" "$COMMON_PATH" || true
 
-          if [[ ! -f "$DEVICE_PATH/AndroidProducts.mk" ]]; then
-            echo "::error::AndroidProducts.mk tidak ditemukan di $DEVICE_PATH."
-            echo "Tidak aman membuat registrasi produk tanpa memeriksa struktur tree."
-            exit 1
-          fi
-
-          if [[ ! -f "$DEVICE_PATH/device.mk" ]]; then
-            echo "::error::device.mk tidak ditemukan di $DEVICE_PATH."
-            exit 1
-          fi
-
-          if [[ ! -f "$DEVICE_PATH/BoardConfig.mk" ]]; then
-            echo "::error::BoardConfig.mk tidak ditemukan di $DEVICE_PATH."
-            exit 1
-          fi
-
           if [[ ! -f vendor/twrp/config/common.mk ]]; then
             echo "::error::vendor/twrp/config/common.mk tidak ditemukan."
-            echo "Source yang tersinkron belum menyediakan konfigurasi dasar recovery yang diperlukan."
             exit 1
           fi
 
-      - name: Configure recovery product
+          if [[ ! -f "$DEVICE_PATH/AndroidProducts.mk" ]]; then
+            echo "::error::AndroidProducts.mk tidak ditemukan."
+            exit 1
+          fi
+
+      - name: Configure OrangeFox recovery product
         shell: bash
         run: |
           set -eo pipefail
@@ -246,15 +266,21 @@ jobs:
           PRODUCT_MK="$DEVICE_PATH/twrp_cupid.mk"
           PRODUCTS_MK="$DEVICE_PATH/AndroidProducts.mk"
 
-          if [[ ! -f "$PRODUCT_MK" ]]; then
-            cat > "$PRODUCT_MK" <<'EOF'
-          PRODUCT_MAKEFILES := \
-              $(LOCAL_DIR)/twrp_cupid.mk
+          cat > "$PRODUCT_MK" <<'EOF'
+          PRODUCT_RELEASE_NAME := cupid
 
-          COMMON_LUNCH_CHOICES := \
-              twrp_cupid-eng
+          DEVICE_PATH := device/xiaomi/cupid
+
+          $(call inherit-product, $(DEVICE_PATH)/device.mk)
+          $(call inherit-product-if-exists, $(DEVICE_PATH)/fox_cupid.mk)
+          $(call inherit-product, vendor/twrp/config/common.mk)
+
+          PRODUCT_NAME := twrp_cupid
+          PRODUCT_DEVICE := cupid
+          PRODUCT_BRAND := Xiaomi
+          PRODUCT_MODEL := Xiaomi 12
+          PRODUCT_MANUFACTURER := Xiaomi
           EOF
-          fi
 
           if ! grep -q 'twrp_cupid.mk' "$PRODUCTS_MK"; then
             cat >> "$PRODUCTS_MK" <<'EOF'
@@ -264,7 +290,7 @@ jobs:
           EOF
           fi
 
-          if ! grep -q 'twrp_cupid' "$PRODUCTS_MK"; then
+          if ! grep -q 'twrp_cupid-eng' "$PRODUCTS_MK"; then
             cat >> "$PRODUCTS_MK" <<'EOF'
 
           COMMON_LUNCH_CHOICES += \
@@ -272,10 +298,10 @@ jobs:
           EOF
           fi
 
-          echo "===== PRODUCT MAKEFILE ====="
+          echo "===== twrp_cupid.mk ====="
           cat "$PRODUCT_MK"
 
-          echo "===== PRODUCT REGISTRATION ====="
+          echo "===== AndroidProducts.mk ====="
           cat "$PRODUCTS_MK"
 
       - name: Detect release configuration
@@ -289,7 +315,6 @@ jobs:
 
           if [[ ! -d "$RELEASE_DIR" ]]; then
             echo "::error::Folder release config tidak ditemukan: $RELEASE_DIR"
-            echo "Periksa versi source OrangeFox dan struktur build system."
             exit 1
           fi
 
@@ -311,12 +336,11 @@ jobs:
           done
 
           if [[ -z "$RELEASE" ]]; then
-            echo "::error::Tidak ditemukan release config yang dikenal dan bisa dipilih."
-            echo "Workflow berhenti agar tidak mengulang error Missing config trunk_staging."
+            echo "::error::Tidak ditemukan release config yang sesuai."
             exit 1
           fi
 
-          echo "Selected release config: $RELEASE"
+          echo "Release config terpilih: $RELEASE"
           echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
 
       - name: Build OrangeFox recovery
@@ -329,25 +353,27 @@ jobs:
 
           export ALLOW_MISSING_DEPENDENCIES=true
           export FOX_BUILD_DEVICE="$DEVICE"
-          export LC_ALL=C
           export TARGET_RELEASE
           export BUILD_USERNAME=github-actions
           export BUILD_HOSTNAME=github-actions
+          export LC_ALL=C
 
-          echo "Using TARGET_RELEASE=$TARGET_RELEASE"
+          echo "TARGET_RELEASE=$TARGET_RELEASE"
 
           source build/envsetup.sh
 
-          if ! lunch "twrp_${DEVICE}-${TARGET_RELEASE}-eng"; then
-            echo "::error::Lunch target twrp_${DEVICE}-${TARGET_RELEASE}-eng gagal."
-            echo "Periksa registrasi product, release config, dan kompatibilitas device tree."
+          LUNCH_TARGET="twrp_${DEVICE}-${TARGET_RELEASE}-eng"
+
+          echo "Lunch target: $LUNCH_TARGET"
+
+          if ! lunch "$LUNCH_TARGET"; then
+            echo "::error::Lunch target gagal: $LUNCH_TARGET"
             exit 1
           fi
 
           mka adbd recoveryimage -j"$ANDROID_JOBS"
 
       - name: Verify recovery image
-        id: image
         shell: bash
         run: |
           set -eo pipefail
@@ -360,6 +386,7 @@ jobs:
             "$PRODUCT_OUT/recovery.img" \
             "$PRODUCT_OUT/OrangeFox-unofficial-${DEVICE}.img" \
             "$PRODUCT_OUT/OrangeFox-${DEVICE}.img"; do
+
             if [[ -s "$candidate" ]]; then
               IMAGE="$candidate"
               break
@@ -367,22 +394,19 @@ jobs:
           done
 
           if [[ -z "$IMAGE" ]]; then
-            echo "::error::Image recovery tidak ditemukan."
-            echo "Isi folder output:"
+            echo "::error::recovery.img tidak ditemukan."
+            echo "===== OUTPUT DIRECTORY ====="
             ls -lah "$PRODUCT_OUT" || true
             exit 1
           fi
 
           mkdir -p "$GITHUB_WORKSPACE/artifacts"
+
           cp "$IMAGE" "$GITHUB_WORKSPACE/artifacts/recovery.img"
 
-          echo "Image source: $IMAGE"
-          echo "Image size:"
-          stat -c '%n %s bytes' \
+          echo "===== IMAGE INFORMATION ====="
+          stat -c '%n - %s bytes' \
             "$GITHUB_WORKSPACE/artifacts/recovery.img"
-
-          echo "image_path=$GITHUB_WORKSPACE/artifacts/recovery.img" \
-            >> "$GITHUB_OUTPUT"
 
       - name: Upload recovery.img
         uses: actions/upload-artifact@v4
