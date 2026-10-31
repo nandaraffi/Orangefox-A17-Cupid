@@ -35,6 +35,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Free disk space
+        shell: bash
         run: |
           set -e
           sudo rm -rf /usr/share/dotnet
@@ -44,6 +45,7 @@ jobs:
           df -h /
 
       - name: Install build dependencies
+        shell: bash
         run: |
           set -e
           sudo apt-get update
@@ -101,11 +103,17 @@ jobs:
           repo version
 
       - name: Configure Git
+        shell: bash
         run: |
           set -e
+
           git config --global user.name "github-actions[bot]"
           git config --global user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git config --global http.maxRequests 5
+          git config --global http.postBuffer 524288000
+
           git lfs install
 
       - name: Sync OrangeFox source
@@ -113,13 +121,16 @@ jobs:
         run: |
           set -eo pipefail
 
-          mkdir -p "$GITHUB_WORKSPACE/fox-source"
+          FOX_SOURCE="$GITHUB_WORKSPACE/fox-source"
+          SYNC_DIR="$GITHUB_WORKSPACE/orangefox-sync"
+
+          mkdir -p "$FOX_SOURCE"
 
           git clone --depth=1 \
             https://gitlab.com/OrangeFox/sync.git \
-            "$GITHUB_WORKSPACE/orangefox-sync"
+            "$SYNC_DIR"
 
-          cd "$GITHUB_WORKSPACE/orangefox-sync"
+          cd "$SYNC_DIR"
 
           if [[ ! -f orangefox_sync.sh ]]; then
             echo "::error::orangefox_sync.sh tidak ditemukan."
@@ -127,18 +138,73 @@ jobs:
           fi
 
           if ! command -v repo >/dev/null 2>&1; then
-            echo "::error::Perintah repo belum tersedia."
+            echo "::error::Google repo tool tidak tersedia."
             exit 1
           fi
 
-          bash orangefox_sync.sh \
+          echo "===== ORANGEFOX SYNC SCRIPT ====="
+          grep -n 'SCRIPT_VERSION=' orangefox_sync.sh || true
+
+          echo "===== INITIAL ORANGEFOX SYNC ====="
+
+          SYNC_OK=false
+
+          if bash orangefox_sync.sh \
             --branch "$FOX_BRANCH" \
-            --path "$GITHUB_WORKSPACE/fox-source"
+            --path "$FOX_SOURCE"; then
 
-          if [[ ! -f "$GITHUB_WORKSPACE/fox-source/build/envsetup.sh" ]]; then
-            echo "::error::Source OrangeFox tidak lengkap."
+            SYNC_OK=true
+
+          else
+            echo "::warning::Sync awal gagal. Memeriksa repository yang sudah diinisialisasi."
+
+            if [[ ! -d "$FOX_SOURCE/.repo" ]]; then
+              echo "::error::Folder .repo tidak ditemukan setelah sync gagal."
+              exit 1
+            fi
+
+            cd "$FOX_SOURCE"
+
+            echo "===== RETRY REPO SYNC ====="
+
+            for attempt in 1 2 3; do
+              echo "Retry $attempt dari 3"
+              echo "Menggunakan repo sync -j1"
+
+              if repo sync \
+                -c \
+                -j1 \
+                --force-sync \
+                --no-clone-bundle \
+                --no-tags; then
+
+                SYNC_OK=true
+                echo "Repo sync berhasil pada retry $attempt."
+                break
+              fi
+
+              echo "::warning::Retry $attempt gagal."
+
+              if [[ "$attempt" -lt 3 ]]; then
+                sleep $((attempt * 20))
+              fi
+            done
+          fi
+
+          if [[ "$SYNC_OK" != true ]]; then
+            echo "::error::OrangeFox source gagal disinkronkan setelah 3 retry."
             exit 1
           fi
+
+          cd "$FOX_SOURCE"
+
+          if [[ ! -f build/envsetup.sh ]]; then
+            echo "::error::build/envsetup.sh tidak ditemukan."
+            exit 1
+          fi
+
+          echo "===== SYNC RESULT ====="
+          repo list | head -n 30
 
       - name: Clone Xiaomi 12 device trees
         shell: bash
@@ -157,15 +223,19 @@ jobs:
 
             if ! git ls-remote --exit-code --heads \
               "$repo_url" "$branch" >/dev/null 2>&1; then
+
               echo "::error::Branch $branch tidak ditemukan: $repo_url"
               exit 1
             fi
 
             rm -rf "$destination"
 
-            git clone --depth=1 --single-branch \
+            git clone \
+              --depth=1 \
+              --single-branch \
               --branch "$branch" \
-              "$repo_url" "$destination"
+              "$repo_url" \
+              "$destination"
           }
 
           clone_branch \
@@ -203,15 +273,19 @@ jobs:
 
             if ! git ls-remote --exit-code --heads \
               "$repo_url" "$branch" >/dev/null 2>&1; then
+
               echo "::error::Branch $branch tidak ditemukan: $repo_url"
               exit 1
             fi
 
             rm -rf "$destination"
 
-            git clone --depth=1 --single-branch \
+            git clone \
+              --depth=1 \
+              --single-branch \
               --branch "$branch" \
-              "$repo_url" "$destination"
+              "$repo_url" \
+              "$destination"
           }
 
           clone_branch \
@@ -226,6 +300,7 @@ jobs:
 
           if [[ ! -f vendor/xiaomi/cupid/Android.mk &&
                 ! -f vendor/xiaomi/cupid/Android.bp ]]; then
+
             echo "::error::Build files vendor Xiaomi cupid tidak ditemukan."
             exit 1
           fi
@@ -243,6 +318,7 @@ jobs:
           ls -la "$COMMON_PATH"
 
           echo "===== RECOVERY SETTINGS ====="
+
           grep -R -n -E \
             'BOARD_USES_RECOVERY_AS_BOOT|BOARD_RECOVERYIMAGE_PARTITION_SIZE|BOARD_RECOVERYIMAGE_PARTITION_NAME|TARGET_NO_RECOVERY|BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT' \
             "$DEVICE_PATH" "$COMMON_PATH" || true
@@ -319,6 +395,7 @@ jobs:
           fi
 
           echo "===== AVAILABLE RELEASE CONFIGS ====="
+
           find "$RELEASE_DIR" -maxdepth 1 -type f \
             \( -name '*.textproto' -o -name '*.mk' \) \
             -printf '%f\n' | sort
@@ -328,6 +405,7 @@ jobs:
           for candidate in ap2a bp1a cp1a trunk_staging; do
             if [[ -f "$RELEASE_DIR/$candidate.textproto" ||
                   -f "$RELEASE_DIR/$candidate.mk" ]]; then
+
               if [[ "$candidate" != "trunk_staging" ]]; then
                 RELEASE="$candidate"
                 break
