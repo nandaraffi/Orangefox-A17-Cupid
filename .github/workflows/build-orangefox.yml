@@ -363,6 +363,8 @@ jobs:
 
           DEVICE_PATH := device/xiaomi/cupid
 
+          TW_THEME := portrait_hdpi
+
           $(call inherit-product, $(DEVICE_PATH)/device.mk)
           $(call inherit-product-if-exists, $(DEVICE_PATH)/fox_cupid.mk)
           $(call inherit-product, vendor/twrp/config/common.mk)
