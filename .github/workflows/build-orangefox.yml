@@ -28,10 +28,11 @@ jobs:
       DEVICE_BRANCH: "lineage-24.0"
       COMMON_BRANCH: "lineage-24.0"
       VENDOR_BRANCH: "lineage-24.0"
-      QCOM_COMMON_BRANCH: "lineage-24.0"
+      QCOM_COMMON_BRANCH: "lineage-21.0"
       KERNEL_BRANCH: "lineage-24.0"
       SEPOLICY_BRANCH: "lineage-24.0-caf-sm8450"
       ANDROID_JOBS: "4"
+      
 
     steps:
       - name: Checkout workflow repository
