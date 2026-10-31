@@ -99,7 +99,6 @@ jobs:
             exit 1
           fi
 
-          echo "===== REPO VERSION ====="
           repo version
 
       - name: Configure Git
@@ -142,9 +141,6 @@ jobs:
             exit 1
           fi
 
-          echo "===== ORANGEFOX SYNC SCRIPT ====="
-          grep -n 'SCRIPT_VERSION=' orangefox_sync.sh || true
-
           echo "===== INITIAL ORANGEFOX SYNC ====="
 
           SYNC_OK=false
@@ -152,11 +148,9 @@ jobs:
           if bash orangefox_sync.sh \
             --branch "$FOX_BRANCH" \
             --path "$FOX_SOURCE"; then
-
             SYNC_OK=true
-
           else
-            echo "::warning::Sync awal gagal. Memeriksa repository yang sudah diinisialisasi."
+            echo "::warning::Sync awal gagal. Mencoba sinkronisasi ulang."
 
             if [[ ! -d "$FOX_SOURCE/.repo" ]]; then
               echo "::error::Folder .repo tidak ditemukan setelah sync gagal."
@@ -165,11 +159,8 @@ jobs:
 
             cd "$FOX_SOURCE"
 
-            echo "===== RETRY REPO SYNC ====="
-
             for attempt in 1 2 3; do
               echo "Retry $attempt dari 3"
-              echo "Menggunakan repo sync -j1"
 
               if repo sync \
                 -c \
@@ -177,9 +168,7 @@ jobs:
                 --force-sync \
                 --no-clone-bundle \
                 --no-tags; then
-
                 SYNC_OK=true
-                echo "Repo sync berhasil pada retry $attempt."
                 break
               fi
 
@@ -192,7 +181,7 @@ jobs:
           fi
 
           if [[ "$SYNC_OK" != true ]]; then
-            echo "::error::OrangeFox source gagal disinkronkan setelah 3 retry."
+            echo "::error::OrangeFox source gagal disinkronkan."
             exit 1
           fi
 
@@ -204,7 +193,11 @@ jobs:
           fi
 
           echo "===== SYNC RESULT ====="
-          repo list | head -n 30
+
+          repo list > "$GITHUB_WORKSPACE/repo-list.txt"
+
+          echo "Daftar repository berhasil disimpan."
+          sed -n '1,30p' "$GITHUB_WORKSPACE/repo-list.txt"
 
       - name: Clone Xiaomi 12 device trees
         shell: bash
@@ -219,11 +212,8 @@ jobs:
             local branch="$2"
             local destination="$3"
 
-            echo "Checking $repo_url ($branch)"
-
             if ! git ls-remote --exit-code --heads \
               "$repo_url" "$branch" >/dev/null 2>&1; then
-
               echo "::error::Branch $branch tidak ditemukan: $repo_url"
               exit 1
             fi
@@ -273,7 +263,6 @@ jobs:
 
             if ! git ls-remote --exit-code --heads \
               "$repo_url" "$branch" >/dev/null 2>&1; then
-
               echo "::error::Branch $branch tidak ditemukan: $repo_url"
               exit 1
             fi
@@ -300,7 +289,6 @@ jobs:
 
           if [[ ! -f vendor/xiaomi/cupid/Android.mk &&
                 ! -f vendor/xiaomi/cupid/Android.bp ]]; then
-
             echo "::error::Build files vendor Xiaomi cupid tidak ditemukan."
             exit 1
           fi
