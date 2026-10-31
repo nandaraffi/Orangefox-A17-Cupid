@@ -28,6 +28,7 @@ jobs:
       DEVICE_BRANCH: "lineage-24.0"
       COMMON_BRANCH: "lineage-24.0"
       VENDOR_BRANCH: "lineage-24.0"
+      QCOM_COMMON_BRANCH: "lineage-24.0"
       ANDROID_JOBS: "4"
 
     steps:
@@ -193,10 +194,7 @@ jobs:
           fi
 
           echo "===== SYNC RESULT ====="
-
           repo list > "$GITHUB_WORKSPACE/repo-list.txt"
-
-          echo "Daftar repository berhasil disimpan."
           sed -n '1,30p' "$GITHUB_WORKSPACE/repo-list.txt"
 
       - name: Clone Xiaomi 12 device trees
@@ -211,6 +209,8 @@ jobs:
             local repo_url="$1"
             local branch="$2"
             local destination="$3"
+
+            echo "Checking $repo_url ($branch)"
 
             if ! git ls-remote --exit-code --heads \
               "$repo_url" "$branch" >/dev/null 2>&1; then
@@ -242,13 +242,48 @@ jobs:
             "$DEVICE_PATH/AndroidProducts.mk" \
             "$DEVICE_PATH/BoardConfig.mk" \
             "$DEVICE_PATH/device.mk" \
-            "$COMMON_PATH/BoardConfigCommon.mk"; do
+            "$COMMON_PATH/BoardConfigCommon.mk" \
+            "$COMMON_PATH/common.mk"; do
 
             if [[ ! -f "$file" ]]; then
               echo "::error::File penting tidak ditemukan: $file"
               exit 1
             fi
           done
+
+      - name: Clone Qualcomm CAF common dependency
+        shell: bash
+        run: |
+          set -eo pipefail
+          cd "$GITHUB_WORKSPACE/fox-source"
+
+          REPO_URL="https://github.com/LineageOS/android_hardware_qcom-caf_common.git"
+          DESTINATION="hardware/qcom-caf/common"
+
+          if ! git ls-remote --exit-code --heads \
+            "$REPO_URL" "$QCOM_COMMON_BRANCH" >/dev/null 2>&1; then
+            echo "::error::Branch $QCOM_COMMON_BRANCH tidak ditemukan di $REPO_URL"
+            exit 1
+          fi
+
+          rm -rf "$DESTINATION"
+          mkdir -p hardware/qcom-caf
+
+          git clone \
+            --depth=1 \
+            --single-branch \
+            --branch "$QCOM_COMMON_BRANCH" \
+            "$REPO_URL" \
+            "$DESTINATION"
+
+          if [[ ! -f "$DESTINATION/common.mk" ]]; then
+            echo "::error::hardware/qcom-caf/common/common.mk tidak ditemukan."
+            exit 1
+          fi
+
+          echo "===== QUALCOMM CAF COMMON ====="
+          git -C "$DESTINATION" log -1 --oneline
+          test -f hardware/qcom-caf/common/common.mk
 
       - name: Clone proprietary vendor trees
         shell: bash
@@ -310,6 +345,11 @@ jobs:
           grep -R -n -E \
             'BOARD_USES_RECOVERY_AS_BOOT|BOARD_RECOVERYIMAGE_PARTITION_SIZE|BOARD_RECOVERYIMAGE_PARTITION_NAME|TARGET_NO_RECOVERY|BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT' \
             "$DEVICE_PATH" "$COMMON_PATH" || true
+
+          if [[ ! -f hardware/qcom-caf/common/common.mk ]]; then
+            echo "::error::Qualcomm CAF common dependency tidak tersedia."
+            exit 1
+          fi
 
           if [[ ! -f vendor/twrp/config/common.mk ]]; then
             echo "::error::vendor/twrp/config/common.mk tidak ditemukan."
@@ -393,7 +433,6 @@ jobs:
           for candidate in ap2a bp1a cp1a trunk_staging; do
             if [[ -f "$RELEASE_DIR/$candidate.textproto" ||
                   -f "$RELEASE_DIR/$candidate.mk" ]]; then
-
               if [[ "$candidate" != "trunk_staging" ]]; then
                 RELEASE="$candidate"
                 break
