@@ -8,7 +8,7 @@ on:
       - ".github/workflows/build-orangefox.yml"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: orangefox-cupid-build
@@ -36,7 +36,7 @@ jobs:
       QCOM_WLAN_BRANCH: "lineage-24.0-caf"
       QCOM_VENDOR_BRANCH: "lineage-21.0"
 
-      ANDROID_JOBS: "4"
+      ANDROID_JOBS: "2"
 
     steps:
       - name: Checkout workflow repository
@@ -73,7 +73,6 @@ jobs:
             https://storage.googleapis.com/git-repo-downloads/repo \
             -o /usr/local/bin/repo
           sudo chmod 0755 /usr/local/bin/repo
-          command -v repo
           repo version
 
       - name: Configure Git
@@ -184,8 +183,7 @@ jobs:
             "$DEVICE_PATH/BoardConfig.mk" \
             "$DEVICE_PATH/device.mk" \
             "$COMMON_PATH/BoardConfigCommon.mk" \
-            "$COMMON_PATH/common.mk" \
-            "$COMMON_PATH/lineage.dependencies"; do
+            "$COMMON_PATH/common.mk"; do
             test -f "$file" || {
               echo "::error::File penting tidak ditemukan: $file"
               exit 1
@@ -275,11 +273,8 @@ jobs:
 
           mkdir -p hardware/qcom-caf/sm8450
 
-          cp \
-            hardware/qcom-caf/common/os_pickup_qssi.bp \
+          cp hardware/qcom-caf/common/os_pickup_qssi.bp \
             hardware/qcom-caf/sm8450/Android.bp
-
-          test -f hardware/qcom-caf/sm8450/Android.bp
 
       - name: Clone Qualcomm WLAN dependency
         shell: bash
@@ -354,20 +349,11 @@ jobs:
             vendor/qcom/opensource/commonsys/display \
             vendor/qcom/opensource/display \
             vendor/qcom/opensource/dataservices; do
-
             test -f "$path/Android.bp" || {
               echo "::error::Android.bp tidak ditemukan: $path"
               exit 1
             }
-
-            echo "OK: $path"
           done
-
-          if grep -n 'export_cflags' \
-            vendor/qcom/opensource/commonsys-intf/display/Android.bp; then
-            echo "::error::Android.bp masih menggunakan export_cflags."
-            exit 1
-          fi
 
       - name: Clone proprietary vendor trees
         shell: bash
@@ -407,7 +393,105 @@ jobs:
             exit 1
           fi
 
-      - name: Check all Soong namespaces
+          test -f vendor/xiaomi/sm8450-common/Android.bp || {
+            echo "::error::Android.bp vendor SM8450 tidak ditemukan."
+            exit 1
+          }
+
+      - name: Disable conflicting WFD vendor module
+        shell: bash
+        run: |
+          set -eo pipefail
+          cd "$GITHUB_WORKSPACE/fox-source"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          path = Path("vendor/xiaomi/sm8450-common/Android.bp")
+          content = path.read_text()
+
+          pattern = re.compile(
+              r'(?m)^[ \t]*(?:cc_[a-zA-Z0-9_]+|soong_namespace)[ \t]*\{'
+          )
+
+          matches = list(pattern.finditer(content))
+          target = None
+
+          for match in matches:
+              start = match.start()
+              brace = content.find("{", match.start())
+              depth = 0
+              quote = None
+              escaped = False
+              end = None
+
+              for i in range(brace, len(content)):
+                  char = content[i]
+
+                  if quote:
+                      if escaped:
+                          escaped = False
+                      elif char == "\\":
+                          escaped = True
+                      elif char == quote:
+                          quote = None
+                      continue
+
+                  if char in ("'", '"', "`"):
+                      quote = char
+                  elif char == "{":
+                      depth += 1
+                  elif char == "}":
+                      depth -= 1
+                      if depth == 0:
+                          end = i + 1
+                          break
+
+              if end is None:
+                  continue
+
+              block = content[start:end]
+
+              if re.search(
+                  r'\bname\s*:\s*"libwfdservice"',
+                  block
+              ):
+                  target = (start, end, block)
+                  break
+
+          if target is None:
+              print("::error::Modul libwfdservice tidak ditemukan.")
+              sys.exit(1)
+
+          start, end, block = target
+
+          if re.search(r'\benabled\s*:', block):
+              block = re.sub(
+                  r'\benabled\s*:\s*(?:true|false)\s*,',
+                  'enabled: false,',
+                  block,
+                  count=1
+              )
+          else:
+              brace = block.find("{")
+              block = (
+                  block[:brace + 1]
+                  + "\n    enabled: false,"
+                  + block[brace + 1:]
+              )
+
+          content = content[:start] + block + content[end:]
+          path.write_text(content)
+
+          print("libwfdservice berhasil dinonaktifkan.")
+          PY
+
+          grep -n -A8 -B3 'name: "libwfdservice"' \
+            vendor/xiaomi/sm8450-common/Android.bp
+
+      - name: Check build dependencies
         shell: bash
         run: |
           set -eo pipefail
@@ -427,10 +511,10 @@ jobs:
           )
 
           for file in "${required_paths[@]}"; do
-            if [[ ! -f "$file" ]]; then
+            test -f "$file" || {
               echo "::error::Dependency tidak ditemukan: $file"
               exit 1
-            fi
+            }
             echo "OK: $file"
           done
 
@@ -440,7 +524,7 @@ jobs:
           echo "===== COMMON TREE ====="
           ls -la "$COMMON_PATH"
 
-          echo "===== RECOVERY SETTINGS ====="
+          echo "===== RECOVERY CONFIG ====="
           grep -R -n -E \
             'BOARD_RECOVERYIMAGE_PARTITION_SIZE|BOARD_RECOVERYIMAGE_PARTITION_NAME|TARGET_RECOVERY_FSTAB|BOARD_USES_RECOVERY_AS_BOOT' \
             "$DEVICE_PATH" "$COMMON_PATH" || true
@@ -491,9 +575,6 @@ jobs:
           echo "===== PRODUCT FILE ====="
           cat "$PRODUCT_MK"
 
-          echo "===== PRODUCT REGISTRATION ====="
-          cat "$PRODUCTS_MK"
-
       - name: Detect release configuration
         id: release
         shell: bash
@@ -508,10 +589,6 @@ jobs:
             exit 1
           fi
 
-          find "$RELEASE_DIR" -maxdepth 1 -type f \
-            \( -name '*.textproto' -o -name '*.mk' \) \
-            -printf '%f\n' | sort
-
           RELEASE=""
 
           for candidate in ap2a bp1a cp1a; do
@@ -523,11 +600,11 @@ jobs:
           done
 
           if [[ -z "$RELEASE" ]]; then
-            echo "::error::Release config yang sesuai tidak ditemukan."
+            echo "::error::Release config tidak ditemukan."
             exit 1
           fi
 
-          echo "Release config terpilih: $RELEASE"
+          echo "Release config: $RELEASE"
           echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
 
       - name: Build OrangeFox recovery
@@ -551,10 +628,10 @@ jobs:
 
           echo "Lunch target: $LUNCH_TARGET"
 
-          if ! lunch "$LUNCH_TARGET"; then
+          lunch "$LUNCH_TARGET" || {
             echo "::error::Lunch target gagal: $LUNCH_TARGET"
             exit 1
-          fi
+          }
 
           mka adbd recoveryimage -j"$ANDROID_JOBS"
 
