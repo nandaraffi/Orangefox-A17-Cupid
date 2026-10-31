@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - ".github/workflows/build.yml"
+      - ".github/workflows/build-orangefox.yml"
 
 permissions:
   contents: write
@@ -29,6 +29,8 @@ jobs:
       COMMON_BRANCH: "lineage-24.0"
       VENDOR_BRANCH: "lineage-24.0"
       QCOM_COMMON_BRANCH: "lineage-24.0"
+      KERNEL_BRANCH: "lineage-24.0"
+      SEPOLICY_BRANCH: "lineage-24.0-caf-sm8450"
       ANDROID_JOBS: "4"
 
     steps:
@@ -51,69 +53,33 @@ jobs:
           set -e
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            bc \
-            bison \
-            build-essential \
-            ccache \
-            curl \
-            flex \
-            git \
-            git-lfs \
-            gnupg \
-            gperf \
-            imagemagick \
-            lib32readline-dev \
-            lib32z1-dev \
-            libelf-dev \
-            liblz4-tool \
-            libncurses-dev \
-            libsdl1.2-dev \
-            libssl-dev \
-            libxml2 \
-            libxml2-utils \
-            lzop \
-            pngcrush \
-            python3 \
-            python-is-python3 \
-            rsync \
-            schedtool \
-            squashfs-tools \
-            unzip \
-            wget \
-            xz-utils \
-            zip \
-            zlib1g-dev
+            bc bison build-essential ccache curl flex git git-lfs \
+            gnupg gperf imagemagick lib32readline-dev lib32z1-dev \
+            libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev \
+            libssl-dev libxml2 libxml2-utils lzop pngcrush \
+            python3 python-is-python3 rsync schedtool \
+            squashfs-tools unzip wget xz-utils zip zlib1g-dev
 
       - name: Install Google repo tool
         shell: bash
         run: |
           set -eo pipefail
-
           sudo curl -fL \
             https://storage.googleapis.com/git-repo-downloads/repo \
             -o /usr/local/bin/repo
-
           sudo chmod 0755 /usr/local/bin/repo
-
-          if ! command -v repo >/dev/null 2>&1; then
-            echo "::error::Google repo tool gagal dipasang."
-            exit 1
-          fi
-
+          command -v repo
           repo version
 
       - name: Configure Git
         shell: bash
         run: |
           set -e
-
           git config --global user.name "github-actions[bot]"
           git config --global user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
-
           git config --global http.maxRequests 5
           git config --global http.postBuffer 524288000
-
           git lfs install
 
       - name: Sync OrangeFox source
@@ -125,24 +91,15 @@ jobs:
           SYNC_DIR="$GITHUB_WORKSPACE/orangefox-sync"
 
           mkdir -p "$FOX_SOURCE"
-
           git clone --depth=1 \
-            https://gitlab.com/OrangeFox/sync.git \
-            "$SYNC_DIR"
+            https://gitlab.com/OrangeFox/sync.git "$SYNC_DIR"
 
           cd "$SYNC_DIR"
 
-          if [[ ! -f orangefox_sync.sh ]]; then
+          test -f orangefox_sync.sh || {
             echo "::error::orangefox_sync.sh tidak ditemukan."
             exit 1
-          fi
-
-          if ! command -v repo >/dev/null 2>&1; then
-            echo "::error::Google repo tool tidak tersedia."
-            exit 1
-          fi
-
-          echo "===== INITIAL ORANGEFOX SYNC ====="
+          }
 
           SYNC_OK=false
 
@@ -151,10 +108,10 @@ jobs:
             --path "$FOX_SOURCE"; then
             SYNC_OK=true
           else
-            echo "::warning::Sync awal gagal. Mencoba sinkronisasi ulang."
+            echo "::warning::Sync awal gagal. Mencoba ulang."
 
             if [[ ! -d "$FOX_SOURCE/.repo" ]]; then
-              echo "::error::Folder .repo tidak ditemukan setelah sync gagal."
+              echo "::error::.repo tidak ditemukan."
               exit 1
             fi
 
@@ -163,21 +120,13 @@ jobs:
             for attempt in 1 2 3; do
               echo "Retry $attempt dari 3"
 
-              if repo sync \
-                -c \
-                -j1 \
-                --force-sync \
-                --no-clone-bundle \
-                --no-tags; then
+              if repo sync -c -j1 --force-sync \
+                --no-clone-bundle --no-tags; then
                 SYNC_OK=true
                 break
               fi
 
-              echo "::warning::Retry $attempt gagal."
-
-              if [[ "$attempt" -lt 3 ]]; then
-                sleep $((attempt * 20))
-              fi
+              sleep $((attempt * 20))
             done
           fi
 
@@ -187,13 +136,8 @@ jobs:
           fi
 
           cd "$FOX_SOURCE"
+          test -f build/envsetup.sh
 
-          if [[ ! -f build/envsetup.sh ]]; then
-            echo "::error::build/envsetup.sh tidak ditemukan."
-            exit 1
-          fi
-
-          echo "===== SYNC RESULT ====="
           repo list > "$GITHUB_WORKSPACE/repo-list.txt"
           sed -n '1,30p' "$GITHUB_WORKSPACE/repo-list.txt"
 
@@ -203,87 +147,139 @@ jobs:
           set -eo pipefail
           cd "$GITHUB_WORKSPACE/fox-source"
 
-          mkdir -p device/xiaomi
-
           clone_branch() {
-            local repo_url="$1"
+            local url="$1"
             local branch="$2"
-            local destination="$3"
+            local dest="$3"
 
-            echo "Checking $repo_url ($branch)"
+            echo "Checking $url ($branch)"
 
-            if ! git ls-remote --exit-code --heads \
-              "$repo_url" "$branch" >/dev/null 2>&1; then
-              echo "::error::Branch $branch tidak ditemukan: $repo_url"
-              exit 1
-            fi
+            git ls-remote --exit-code --heads \
+              "$url" "$branch" >/dev/null || {
+                echo "::error::Branch $branch tidak ditemukan: $url"
+                exit 1
+              }
 
-            rm -rf "$destination"
+            rm -rf "$dest"
+            mkdir -p "$(dirname "$dest")"
 
-            git clone \
-              --depth=1 \
-              --single-branch \
-              --branch "$branch" \
-              "$repo_url" \
-              "$destination"
+            git clone --depth=1 --single-branch \
+              --branch "$branch" "$url" "$dest"
           }
 
           clone_branch \
             https://github.com/nandaraffi/android_device_xiaomi_cupid.git \
-            "$DEVICE_BRANCH" \
-            "$DEVICE_PATH"
+            "$DEVICE_BRANCH" "$DEVICE_PATH"
 
           clone_branch \
             https://github.com/nandaraffi/android_device_xiaomi_sm8450-common.git \
-            "$COMMON_BRANCH" \
-            "$COMMON_PATH"
+            "$COMMON_BRANCH" "$COMMON_PATH"
 
           for file in \
             "$DEVICE_PATH/AndroidProducts.mk" \
             "$DEVICE_PATH/BoardConfig.mk" \
             "$DEVICE_PATH/device.mk" \
             "$COMMON_PATH/BoardConfigCommon.mk" \
-            "$COMMON_PATH/common.mk"; do
-
-            if [[ ! -f "$file" ]]; then
+            "$COMMON_PATH/common.mk" \
+            "$COMMON_PATH/lineage.dependencies"; do
+            test -f "$file" || {
               echo "::error::File penting tidak ditemukan: $file"
               exit 1
-            fi
+            }
           done
 
-      - name: Clone Qualcomm CAF common dependency
+      - name: Clone Xiaomi kernel and hardware dependencies
         shell: bash
         run: |
           set -eo pipefail
           cd "$GITHUB_WORKSPACE/fox-source"
 
-          REPO_URL="https://github.com/LineageOS/android_hardware_qcom-caf_common.git"
-          DESTINATION="hardware/qcom-caf/common"
+          clone_branch() {
+            local url="$1"
+            local branch="$2"
+            local dest="$3"
 
-          if ! git ls-remote --exit-code --heads \
-            "$REPO_URL" "$QCOM_COMMON_BRANCH" >/dev/null 2>&1; then
-            echo "::error::Branch $QCOM_COMMON_BRANCH tidak ditemukan di $REPO_URL"
+            echo "Checking $url ($branch)"
+
+            git ls-remote --exit-code --heads \
+              "$url" "$branch" >/dev/null || {
+                echo "::error::Branch $branch tidak ditemukan: $url"
+                exit 1
+              }
+
+            rm -rf "$dest"
+            mkdir -p "$(dirname "$dest")"
+
+            git clone --depth=1 --single-branch \
+              --branch "$branch" "$url" "$dest"
+          }
+
+          clone_branch \
+            https://github.com/LineageOS/android_hardware_xiaomi.git \
+            "$KERNEL_BRANCH" hardware/xiaomi
+
+          clone_branch \
+            https://github.com/LineageOS/android_kernel_xiaomi_sm8450.git \
+            "$KERNEL_BRANCH" kernel/xiaomi/sm8450
+
+          clone_branch \
+            https://github.com/LineageOS/android_kernel_xiaomi_sm8450-devicetrees.git \
+            "$KERNEL_BRANCH" kernel/xiaomi/sm8450-devicetrees
+
+          clone_branch \
+            https://github.com/LineageOS/android_kernel_xiaomi_sm8450-modules.git \
+            "$KERNEL_BRANCH" kernel/xiaomi/sm8450-modules
+
+          test -s kernel/xiaomi/sm8450/modules.list.msm.waipio || {
+            echo "::error::modules.list.msm.waipio tidak ditemukan atau kosong."
             exit 1
-          fi
+          }
 
-          rm -rf "$DESTINATION"
-          mkdir -p hardware/qcom-caf
+          test -d kernel/xiaomi/sm8450-devicetrees
+          test -d kernel/xiaomi/sm8450-modules
 
-          git clone \
-            --depth=1 \
-            --single-branch \
-            --branch "$QCOM_COMMON_BRANCH" \
-            "$REPO_URL" \
-            "$DESTINATION"
+          echo "===== KERNEL DEPENDENCIES ====="
+          ls -lh kernel/xiaomi/sm8450/modules.list.msm.waipio
+          git -C kernel/xiaomi/sm8450 log -1 --oneline
 
-          if [[ ! -f "$DESTINATION/common.mk" ]]; then
-            echo "::error::hardware/qcom-caf/common/common.mk tidak ditemukan."
-            exit 1
-          fi
+      - name: Clone Qualcomm CAF dependencies
+        shell: bash
+        run: |
+          set -eo pipefail
+          cd "$GITHUB_WORKSPACE/fox-source"
 
-          echo "===== QUALCOMM CAF COMMON ====="
-          git -C "$DESTINATION" log -1 --oneline
+          clone_branch() {
+            local url="$1"
+            local branch="$2"
+            local dest="$3"
+
+            git ls-remote --exit-code --heads \
+              "$url" "$branch" >/dev/null || {
+                echo "::error::Branch $branch tidak ditemukan: $url"
+                exit 1
+              }
+
+            rm -rf "$dest"
+            mkdir -p "$(dirname "$dest")"
+
+            git clone --depth=1 --single-branch \
+              --branch "$branch" "$url" "$dest"
+          }
+
+          clone_branch \
+            https://github.com/LineageOS/android_hardware_qcom-caf_common.git \
+            "$QCOM_COMMON_BRANCH" hardware/qcom-caf/common
+
+          clone_branch \
+            https://github.com/LineageOS/android_device_qcom_sepolicy_vndr.git \
+            "$SEPOLICY_BRANCH" device/qcom/sepolicy_vndr
+
           test -f hardware/qcom-caf/common/common.mk
+          test -f device/qcom/sepolicy_vndr/SEPolicy.mk
+
+          echo "===== QUALCOMM DEPENDENCIES ====="
+          git -C hardware/qcom-caf/common log -1 --oneline
+          git -C device/qcom/sepolicy_vndr log -1 --oneline
 
       - name: Clone proprietary vendor trees
         shell: bash
@@ -292,37 +288,32 @@ jobs:
           cd "$GITHUB_WORKSPACE/fox-source"
 
           clone_branch() {
-            local repo_url="$1"
+            local url="$1"
             local branch="$2"
-            local destination="$3"
+            local dest="$3"
 
-            if ! git ls-remote --exit-code --heads \
-              "$repo_url" "$branch" >/dev/null 2>&1; then
-              echo "::error::Branch $branch tidak ditemukan: $repo_url"
-              exit 1
-            fi
+            git ls-remote --exit-code --heads \
+              "$url" "$branch" >/dev/null || {
+                echo "::error::Branch $branch tidak ditemukan: $url"
+                exit 1
+              }
 
-            rm -rf "$destination"
+            rm -rf "$dest"
+            mkdir -p "$(dirname "$dest")"
 
-            git clone \
-              --depth=1 \
-              --single-branch \
-              --branch "$branch" \
-              "$repo_url" \
-              "$destination"
+            git clone --depth=1 --single-branch \
+              --branch "$branch" "$url" "$dest"
           }
 
           clone_branch \
             https://github.com/TheMuppets/proprietary_vendor_xiaomi_cupid.git \
-            "$VENDOR_BRANCH" \
-            vendor/xiaomi/cupid
+            "$VENDOR_BRANCH" vendor/xiaomi/cupid
 
           clone_branch \
             https://github.com/TheMuppets/proprietary_vendor_xiaomi_sm8450-common.git \
-            "$VENDOR_BRANCH" \
-            vendor/xiaomi/sm8450-common
+            "$VENDOR_BRANCH" vendor/xiaomi/sm8450-common
 
-          if [[ ! -f vendor/xiaomi/cupid/Android.mk &&
+          if [[ ! -f vendor/xiaomi/cupid/Android.mk && \
                 ! -f vendor/xiaomi/cupid/Android.bp ]]; then
             echo "::error::Build files vendor Xiaomi cupid tidak ditemukan."
             exit 1
@@ -340,26 +331,23 @@ jobs:
           echo "===== COMMON TREE ====="
           ls -la "$COMMON_PATH"
 
+          for file in \
+            hardware/qcom-caf/common/common.mk \
+            device/qcom/sepolicy_vndr/SEPolicy.mk \
+            kernel/xiaomi/sm8450/modules.list.msm.waipio \
+            vendor/xiaomi/cupid/BoardConfigVendor.mk \
+            vendor/xiaomi/sm8450-common/BoardConfigVendor.mk \
+            vendor/twrp/config/common.mk; do
+            if [[ ! -f "$file" ]]; then
+              echo "::error::Dependency tidak ditemukan: $file"
+              exit 1
+            fi
+          done
+
           echo "===== RECOVERY SETTINGS ====="
-
           grep -R -n -E \
-            'BOARD_USES_RECOVERY_AS_BOOT|BOARD_RECOVERYIMAGE_PARTITION_SIZE|BOARD_RECOVERYIMAGE_PARTITION_NAME|TARGET_NO_RECOVERY|BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT' \
+            'BOARD_RECOVERYIMAGE_PARTITION_SIZE|BOARD_RECOVERYIMAGE_PARTITION_NAME|TARGET_RECOVERY_FSTAB|BOARD_USES_RECOVERY_AS_BOOT' \
             "$DEVICE_PATH" "$COMMON_PATH" || true
-
-          if [[ ! -f hardware/qcom-caf/common/common.mk ]]; then
-            echo "::error::Qualcomm CAF common dependency tidak tersedia."
-            exit 1
-          fi
-
-          if [[ ! -f vendor/twrp/config/common.mk ]]; then
-            echo "::error::vendor/twrp/config/common.mk tidak ditemukan."
-            exit 1
-          fi
-
-          if [[ ! -f "$DEVICE_PATH/AndroidProducts.mk" ]]; then
-            echo "::error::AndroidProducts.mk tidak ditemukan."
-            exit 1
-          fi
 
       - name: Configure OrangeFox recovery product
         shell: bash
@@ -402,10 +390,10 @@ jobs:
           EOF
           fi
 
-          echo "===== twrp_cupid.mk ====="
+          echo "===== PRODUCT FILE ====="
           cat "$PRODUCT_MK"
 
-          echo "===== AndroidProducts.mk ====="
+          echo "===== PRODUCT REGISTRATION ====="
           cat "$PRODUCTS_MK"
 
       - name: Detect release configuration
@@ -418,11 +406,9 @@ jobs:
           RELEASE_DIR="build/release/release_configs"
 
           if [[ ! -d "$RELEASE_DIR" ]]; then
-            echo "::error::Folder release config tidak ditemukan: $RELEASE_DIR"
+            echo "::error::Folder release config tidak ditemukan."
             exit 1
           fi
-
-          echo "===== AVAILABLE RELEASE CONFIGS ====="
 
           find "$RELEASE_DIR" -maxdepth 1 -type f \
             \( -name '*.textproto' -o -name '*.mk' \) \
@@ -430,18 +416,16 @@ jobs:
 
           RELEASE=""
 
-          for candidate in ap2a bp1a cp1a trunk_staging; do
-            if [[ -f "$RELEASE_DIR/$candidate.textproto" ||
+          for candidate in ap2a bp1a cp1a; do
+            if [[ -f "$RELEASE_DIR/$candidate.textproto" || \
                   -f "$RELEASE_DIR/$candidate.mk" ]]; then
-              if [[ "$candidate" != "trunk_staging" ]]; then
-                RELEASE="$candidate"
-                break
-              fi
+              RELEASE="$candidate"
+              break
             fi
           done
 
           if [[ -z "$RELEASE" ]]; then
-            echo "::error::Tidak ditemukan release config yang sesuai."
+            echo "::error::Release config yang sesuai tidak ditemukan."
             exit 1
           fi
 
@@ -491,7 +475,6 @@ jobs:
             "$PRODUCT_OUT/recovery.img" \
             "$PRODUCT_OUT/OrangeFox-unofficial-${DEVICE}.img" \
             "$PRODUCT_OUT/OrangeFox-${DEVICE}.img"; do
-
             if [[ -s "$candidate" ]]; then
               IMAGE="$candidate"
               break
@@ -500,13 +483,11 @@ jobs:
 
           if [[ -z "$IMAGE" ]]; then
             echo "::error::recovery.img tidak ditemukan."
-            echo "===== OUTPUT DIRECTORY ====="
             ls -lah "$PRODUCT_OUT" || true
             exit 1
           fi
 
           mkdir -p "$GITHUB_WORKSPACE/artifacts"
-
           cp "$IMAGE" "$GITHUB_WORKSPACE/artifacts/recovery.img"
 
           echo "===== IMAGE INFORMATION ====="
