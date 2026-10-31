@@ -31,8 +31,8 @@ jobs:
       QCOM_COMMON_BRANCH: "lineage-21.0"
       KERNEL_BRANCH: "lineage-24.0"
       SEPOLICY_BRANCH: "lineage-24.0-caf-sm8450"
+      QCOM_WLAN_BRANCH: "lineage-24.0-caf"
       ANDROID_JOBS: "4"
-      
 
     steps:
       - name: Checkout workflow repository
@@ -92,6 +92,7 @@ jobs:
           SYNC_DIR="$GITHUB_WORKSPACE/orangefox-sync"
 
           mkdir -p "$FOX_SOURCE"
+
           git clone --depth=1 \
             https://gitlab.com/OrangeFox/sync.git "$SYNC_DIR"
 
@@ -153,8 +154,6 @@ jobs:
             local branch="$2"
             local dest="$3"
 
-            echo "Checking $url ($branch)"
-
             git ls-remote --exit-code --heads \
               "$url" "$branch" >/dev/null || {
                 echo "::error::Branch $branch tidak ditemukan: $url"
@@ -200,8 +199,6 @@ jobs:
             local branch="$2"
             local dest="$3"
 
-            echo "Checking $url ($branch)"
-
             git ls-remote --exit-code --heads \
               "$url" "$branch" >/dev/null || {
                 echo "::error::Branch $branch tidak ditemukan: $url"
@@ -232,18 +229,11 @@ jobs:
             "$KERNEL_BRANCH" kernel/xiaomi/sm8450-modules
 
           test -s kernel/xiaomi/sm8450/modules.list.msm.waipio || {
-            echo "::error::modules.list.msm.waipio tidak ditemukan atau kosong."
+            echo "::error::modules.list.msm.waipio tidak ditemukan."
             exit 1
           }
 
-          test -d kernel/xiaomi/sm8450-devicetrees
-          test -d kernel/xiaomi/sm8450-modules
-
-          echo "===== KERNEL DEPENDENCIES ====="
-          ls -lh kernel/xiaomi/sm8450/modules.list.msm.waipio
-          git -C kernel/xiaomi/sm8450 log -1 --oneline
-
-      - name: Clone Qualcomm CAF dependencies
+      - name: Clone Qualcomm CAF common and sepolicy
         shell: bash
         run: |
           set -eo pipefail
@@ -276,11 +266,104 @@ jobs:
             "$SEPOLICY_BRANCH" device/qcom/sepolicy_vndr
 
           test -f hardware/qcom-caf/common/common.mk
+          test -f hardware/qcom-caf/common/os_pickup_qssi.bp
+
           test -f device/qcom/sepolicy_vndr/SEPolicy.mk
 
-          echo "===== QUALCOMM DEPENDENCIES ====="
+          # Recreate the LineageOS repo-manifest linkfile.
+          mkdir -p hardware/qcom-caf/sm8450
+
+          cp \
+            hardware/qcom-caf/common/os_pickup_qssi.bp \
+            hardware/qcom-caf/sm8450/Android.bp
+
+          test -f hardware/qcom-caf/sm8450/Android.bp
+
+          echo "===== CAF COMMON ====="
           git -C hardware/qcom-caf/common log -1 --oneline
-          git -C device/qcom/sepolicy_vndr log -1 --oneline
+
+          echo "===== SM8450 NAMESPACE ====="
+          cat hardware/qcom-caf/sm8450/Android.bp
+
+      - name: Clone Qualcomm WLAN dependency
+        shell: bash
+        run: |
+          set -eo pipefail
+          cd "$GITHUB_WORKSPACE/fox-source"
+
+          URL="https://github.com/LineageOS/android_hardware_qcom_wlan.git"
+
+          git ls-remote --exit-code --heads \
+            "$URL" "$QCOM_WLAN_BRANCH" >/dev/null || {
+              echo "::error::Branch WLAN tidak ditemukan."
+              exit 1
+            }
+
+          rm -rf hardware/qcom-caf/wlan
+          mkdir -p hardware/qcom-caf
+
+          git clone --depth=1 --single-branch \
+            --branch "$QCOM_WLAN_BRANCH" \
+            "$URL" hardware/qcom-caf/wlan
+
+          test -f hardware/qcom-caf/wlan/Android.bp
+
+      - name: Clone Qualcomm vendor display dependencies
+        shell: bash
+        run: |
+          set -eo pipefail
+          cd "$GITHUB_WORKSPACE/fox-source"
+
+          clone_branch() {
+            local repo="$1"
+            local dest="$2"
+            local branch="${3:-$VENDOR_BRANCH}"
+            local url="https://github.com/LineageOS/${repo}.git"
+
+            git ls-remote --exit-code --heads \
+              "$url" "$branch" >/dev/null || {
+                echo "::error::Branch $branch tidak ditemukan: $repo"
+                exit 1
+              }
+
+            rm -rf "$dest"
+            mkdir -p "$(dirname "$dest")"
+
+            git clone --depth=1 --single-branch \
+              --branch "$branch" "$url" "$dest"
+          }
+
+          clone_branch \
+            android_vendor_qcom_opensource_display-commonsys-intf \
+            vendor/qcom/opensource/commonsys-intf/display
+
+          clone_branch \
+            android_vendor_qcom_opensource_display-commonsys \
+            vendor/qcom/opensource/commonsys/display
+
+          clone_branch \
+            android_vendor_qcom_opensource_display \
+            vendor/qcom/opensource/display
+
+          clone_branch \
+            android_vendor_qcom_opensource_dataservices \
+            vendor/qcom/opensource/dataservices
+
+          echo "===== DISPLAY NAMESPACES ====="
+
+          for path in \
+            vendor/qcom/opensource/commonsys-intf/display \
+            vendor/qcom/opensource/commonsys/display \
+            vendor/qcom/opensource/display \
+            vendor/qcom/opensource/dataservices; do
+
+            test -f "$path/Android.bp" || {
+              echo "::error::Android.bp tidak ditemukan: $path"
+              exit 1
+            }
+
+            echo "OK: $path"
+          done
 
       - name: Clone proprietary vendor trees
         shell: bash
@@ -320,11 +403,32 @@ jobs:
             exit 1
           fi
 
-      - name: Check device tree and recovery configuration
+      - name: Check all Soong namespaces
         shell: bash
         run: |
           set -eo pipefail
           cd "$GITHUB_WORKSPACE/fox-source"
+
+          required_paths=(
+            "hardware/qcom-caf/common/common.mk"
+            "hardware/qcom-caf/sm8450/Android.bp"
+            "hardware/qcom-caf/wlan/Android.bp"
+            "device/qcom/sepolicy_vndr/SEPolicy.mk"
+            "vendor/qcom/opensource/commonsys-intf/display/Android.bp"
+            "vendor/qcom/opensource/commonsys/display/Android.bp"
+            "vendor/qcom/opensource/display/Android.bp"
+            "vendor/qcom/opensource/dataservices/Android.bp"
+            "kernel/xiaomi/sm8450/modules.list.msm.waipio"
+            "vendor/twrp/config/common.mk"
+          )
+
+          for file in "${required_paths[@]}"; do
+            if [[ ! -f "$file" ]]; then
+              echo "::error::Dependency tidak ditemukan: $file"
+              exit 1
+            fi
+            echo "OK: $file"
+          done
 
           echo "===== DEVICE TREE ====="
           ls -la "$DEVICE_PATH"
@@ -332,23 +436,15 @@ jobs:
           echo "===== COMMON TREE ====="
           ls -la "$COMMON_PATH"
 
-          for file in \
-            hardware/qcom-caf/common/common.mk \
-            device/qcom/sepolicy_vndr/SEPolicy.mk \
-            kernel/xiaomi/sm8450/modules.list.msm.waipio \
-            vendor/xiaomi/cupid/BoardConfigVendor.mk \
-            vendor/xiaomi/sm8450-common/BoardConfigVendor.mk \
-            vendor/twrp/config/common.mk; do
-            if [[ ! -f "$file" ]]; then
-              echo "::error::Dependency tidak ditemukan: $file"
-              exit 1
-            fi
-          done
-
           echo "===== RECOVERY SETTINGS ====="
           grep -R -n -E \
             'BOARD_RECOVERYIMAGE_PARTITION_SIZE|BOARD_RECOVERYIMAGE_PARTITION_NAME|TARGET_RECOVERY_FSTAB|BOARD_USES_RECOVERY_AS_BOOT' \
             "$DEVICE_PATH" "$COMMON_PATH" || true
+
+          echo "===== VENDOR NAMESPACES ====="
+          grep -n -A15 'soong_namespace' \
+            vendor/xiaomi/cupid/Android.bp \
+            vendor/xiaomi/sm8450-common/Android.bp
 
       - name: Configure OrangeFox recovery product
         shell: bash
