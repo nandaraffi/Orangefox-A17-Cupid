@@ -25,13 +25,17 @@ jobs:
       DEVICE: "cupid"
       DEVICE_PATH: "device/xiaomi/cupid"
       COMMON_PATH: "device/xiaomi/sm8450-common"
+
       DEVICE_BRANCH: "lineage-24.0"
       COMMON_BRANCH: "lineage-24.0"
       VENDOR_BRANCH: "lineage-24.0"
-      QCOM_COMMON_BRANCH: "lineage-21.0"
       KERNEL_BRANCH: "lineage-24.0"
+
+      QCOM_COMMON_BRANCH: "lineage-21.0"
       SEPOLICY_BRANCH: "lineage-24.0-caf-sm8450"
       QCOM_WLAN_BRANCH: "lineage-24.0-caf"
+      QCOM_VENDOR_BRANCH: "lineage-21.0"
+
       ANDROID_JOBS: "4"
 
     steps:
@@ -267,10 +271,8 @@ jobs:
 
           test -f hardware/qcom-caf/common/common.mk
           test -f hardware/qcom-caf/common/os_pickup_qssi.bp
-
           test -f device/qcom/sepolicy_vndr/SEPolicy.mk
 
-          # Recreate the LineageOS repo-manifest linkfile.
           mkdir -p hardware/qcom-caf/sm8450
 
           cp \
@@ -278,12 +280,6 @@ jobs:
             hardware/qcom-caf/sm8450/Android.bp
 
           test -f hardware/qcom-caf/sm8450/Android.bp
-
-          echo "===== CAF COMMON ====="
-          git -C hardware/qcom-caf/common log -1 --oneline
-
-          echo "===== SM8450 NAMESPACE ====="
-          cat hardware/qcom-caf/sm8450/Android.bp
 
       - name: Clone Qualcomm WLAN dependency
         shell: bash
@@ -317,7 +313,7 @@ jobs:
           clone_branch() {
             local repo="$1"
             local dest="$2"
-            local branch="${3:-$VENDOR_BRANCH}"
+            local branch="$3"
             local url="https://github.com/LineageOS/${repo}.git"
 
             git ls-remote --exit-code --heads \
@@ -335,21 +331,23 @@ jobs:
 
           clone_branch \
             android_vendor_qcom_opensource_display-commonsys-intf \
-            vendor/qcom/opensource/commonsys-intf/display
+            vendor/qcom/opensource/commonsys-intf/display \
+            "$QCOM_VENDOR_BRANCH"
 
           clone_branch \
             android_vendor_qcom_opensource_display-commonsys \
-            vendor/qcom/opensource/commonsys/display
+            vendor/qcom/opensource/commonsys/display \
+            "$QCOM_VENDOR_BRANCH"
 
           clone_branch \
             android_vendor_qcom_opensource_display \
-            vendor/qcom/opensource/display
+            vendor/qcom/opensource/display \
+            "$QCOM_VENDOR_BRANCH"
 
           clone_branch \
             android_vendor_qcom_opensource_dataservices \
-            vendor/qcom/opensource/dataservices
-
-          echo "===== DISPLAY NAMESPACES ====="
+            vendor/qcom/opensource/dataservices \
+            "$QCOM_VENDOR_BRANCH"
 
           for path in \
             vendor/qcom/opensource/commonsys-intf/display \
@@ -364,6 +362,12 @@ jobs:
 
             echo "OK: $path"
           done
+
+          if grep -n 'export_cflags' \
+            vendor/qcom/opensource/commonsys-intf/display/Android.bp; then
+            echo "::error::Android.bp masih menggunakan export_cflags."
+            exit 1
+          fi
 
       - name: Clone proprietary vendor trees
         shell: bash
@@ -440,11 +444,6 @@ jobs:
           grep -R -n -E \
             'BOARD_RECOVERYIMAGE_PARTITION_SIZE|BOARD_RECOVERYIMAGE_PARTITION_NAME|TARGET_RECOVERY_FSTAB|BOARD_USES_RECOVERY_AS_BOOT' \
             "$DEVICE_PATH" "$COMMON_PATH" || true
-
-          echo "===== VENDOR NAMESPACES ====="
-          grep -n -A15 'soong_namespace' \
-            vendor/xiaomi/cupid/Android.bp \
-            vendor/xiaomi/sm8450-common/Android.bp
 
       - name: Configure OrangeFox recovery product
         shell: bash
@@ -546,8 +545,6 @@ jobs:
           export BUILD_HOSTNAME=github-actions
           export LC_ALL=C
 
-          echo "TARGET_RELEASE=$TARGET_RELEASE"
-
           source build/envsetup.sh
 
           LUNCH_TARGET="twrp_${DEVICE}-${TARGET_RELEASE}-eng"
@@ -589,7 +586,6 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/artifacts"
           cp "$IMAGE" "$GITHUB_WORKSPACE/artifacts/recovery.img"
 
-          echo "===== IMAGE INFORMATION ====="
           stat -c '%n - %s bytes' \
             "$GITHUB_WORKSPACE/artifacts/recovery.img"
 
